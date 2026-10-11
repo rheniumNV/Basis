@@ -1,0 +1,67 @@
+{
+  "rewardSizeBonus": 1.0,
+  "crownGoldPercent": 5,
+  "crownSilverPercent": 10,
+  "fish": [
+    {
+      "name": "フナ",
+      "weight": 35,
+      "minCm": 12,
+      "maxCm": 28,
+      "rare": false,
+      "baseExp": 5,
+      "baseMoney": 10,
+      "model": { "type": "fish", "lengthCm": 20, "width": 0.05, "height": 0.09, "body": "8E9C5E", "belly": "DCD5A3", "fin": "6F7D45", "patch": "", "stripe": "", "whiskers": false }
+    },
+    {
+      "name": "コイ",
+      "weight": 25,
+      "minCm": 30,
+      "maxCm": 75,
+      "rare": false,
+      "baseExp": 10,
+      "baseMoney": 25,
+      "model": { "type": "fish", "lengthCm": 40, "width": 0.09, "height": 0.13, "body": "F28C38", "belly": "FFF4E6", "fin": "F5A35F", "patch": "FFFFFF", "stripe": "", "whiskers": false }
+    },
+    {
+      "name": "ニジマス",
+      "weight": 20,
+      "minCm": 20,
+      "maxCm": 50,
+      "rare": false,
+      "baseExp": 8,
+      "baseMoney": 20,
+      "model": { "type": "fish", "lengthCm": 30, "width": 0.055, "height": 0.08, "body": "9DB8A8", "belly": "F4F4F4", "fin": "7FA08E", "patch": "", "stripe": "F59AC2", "whiskers": false }
+    },
+    {
+      "name": "ナマズ",
+      "weight": 12,
+      "minCm": 35,
+      "maxCm": 90,
+      "rare": false,
+      "baseExp": 15,
+      "baseMoney": 40,
+      "model": { "type": "fish", "lengthCm": 50, "width": 0.12, "height": 0.075, "body": "6E6A72", "belly": "CFC8C0", "fin": "5A565E", "patch": "", "stripe": "", "whiskers": true }
+    },
+    {
+      "name": "金のコイ",
+      "weight": 6,
+      "minCm": 40,
+      "maxCm": 80,
+      "rare": true,
+      "baseExp": 50,
+      "baseMoney": 200,
+      "model": { "type": "fish", "lengthCm": 40, "width": 0.09, "height": 0.13, "body": "F7C948", "belly": "FFF1B8", "fin": "FFB627", "patch": "", "stripe": "", "whiskers": false }
+    },
+    {
+      "name": "長靴",
+      "weight": 2,
+      "minCm": 26,
+      "maxCm": 30,
+      "rare": false,
+      "baseExp": 1,
+      "baseMoney": 1,
+      "model": { "type": "boot", "lengthCm": 30, "width": 0.1, "height": 0.1, "body": "5E8C61", "belly": "3F4A40", "fin": "", "patch": "", "stripe": "", "whiskers": false }
+    }
+  ]
+}

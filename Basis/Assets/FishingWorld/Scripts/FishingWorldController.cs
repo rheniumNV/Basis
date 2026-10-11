@@ -11,11 +11,17 @@ using UnityEngine;
 
 /// <summary>
 /// The fishing world: the button on the rod stand, the pool of rods it hands out, the fish
-/// table and the catch board.
+/// table, the catch board (recent catches and the level ranking) and the local player's own
+/// encyclopedia board.
 ///
 /// The rods are placed in the scene inactive (a networked object's id comes from its hierarchy
 /// path, so a runtime copy could not be synced). Pressing the button brings out the next one for
 /// everybody; a player who joins later is told by the owner of this object which are out.
+///
+/// Persistence goes through FishingBackend, which pulls the catches to send from here and pushes
+/// the ranking and the encyclopedia back. This script never calls into it: the backend uses
+/// permission-gated APIs, and if a player refuses them it is switched off, which must not take
+/// the fishing down with it.
 /// </summary>
 [Cilboxable]
 public class FishingWorldController : MonoBehaviour
@@ -23,6 +29,7 @@ public class FishingWorldController : MonoBehaviour
     private const byte MsgActivate = 1;
     private const byte MsgSnapshot = 2;
     private const int RecentCount = 5;
+    private const int PendingCapacity = 32;
 
     [Header("Rods")]
     public BasisInteractableButton SpawnButton;
@@ -36,30 +43,79 @@ public class FishingWorldController : MonoBehaviour
     public AudioSource ButtonAudio;
     public AudioClip ButtonClip;
 
-    [Header("Fish")]
+    [Header("Fish (from Data/fish.json)")]
     public string[] SpeciesNames;
     public float[] SpeciesWeights;
     public float[] SpeciesMinCm;
     public float[] SpeciesMaxCm;
     // 1 = rare (sparkles, starred on the board). int, not bool: Cilbox cannot read bool[] elements.
     public int[] SpeciesRare;
+    public int[] SpeciesBaseExp;
+    public int[] SpeciesBaseMoney;
+    // Reward multiplier at the largest size: 1 + RewardSizeBonus (linear in size between).
+    public float RewardSizeBonus = 1f;
+    // Crowns for a size among the largest (max) or smallest (min) this share of possible catches.
+    public float CrownGoldPercent = 5f;
+    public float CrownSilverPercent = 10f;
 
-    [Header("Board")]
+    [Header("Catch board")]
     public TextMeshPro RecentText;
-    public TextMeshPro CountsText;
+    public TextMeshPro RankingText;
     public TextMeshPro StandText;
+
+    [Header("Script permission notices")]
+    // Shown in the scene by default; this script hides it on start. If the world's scripts do not
+    // run at all (permission prompt unanswered or refused), it stays up and says so.
+    public GameObject ScriptWarning;
+    // Shown when the scripts run but the record server's permission was refused.
+    public TextMeshPro PermissionNote;
+    // 1 when Data/backend.json has a server, so FishingBackend is expected to be running.
+    public int BackendExpected;
+    public float BackendGraceSeconds = 8f;
+
+    [Header("Encyclopedia board (one row per species)")]
+    public TextMeshPro ZukanStatus;
+    public TextMeshPro[] ZukanName;
+    public TextMeshPro[] ZukanCount;
+    public TextMeshPro[] ZukanMax;
+    public TextMeshPro[] ZukanMin;
+    public GameObject[] ZukanMaxGold;
+    public GameObject[] ZukanMaxSilver;
+    public GameObject[] ZukanMinGold;
+    public GameObject[] ZukanMinSilver;
 
     private BasisNetworkShim net;
     private int activeMask;
-    private int[] counts;
     private string[] recent;
     private float standMessageUntil;
+    private float startedAt;
+    private float backendSeenAt = -1f;
+    private bool backendMissing;
+
+    // The local player's encyclopedia: from the server once loaded, plus this visit's catches.
+    private int[] myCount;
+    private float[] myMin;
+    private float[] myMax;
+
+    // Catches by the local player waiting to be sent, oldest first.
+    private int[] pendingSpecies;
+    private float[] pendingCm;
+    private int pendingStart;
+    private int pendingLength;
 
     private void Start()
     {
-        counts = new int[SpeciesNames.Length];
+        if (ScriptWarning != null) ScriptWarning.SetActive(false);
+        if (PermissionNote != null) PermissionNote.text = "";
+        startedAt = Time.time;
         recent = new string[RecentCount];
         for (int i = 0; i < RecentCount; i++) recent[i] = "";
+        int n = SpeciesNames.Length;
+        myCount = new int[n];
+        myMin = new float[n];
+        myMax = new float[n];
+        pendingSpecies = new int[PendingCapacity];
+        pendingCm = new float[PendingCapacity];
 
         SpawnButton.ButtonDown = OnButtonDown;
 
@@ -69,7 +125,10 @@ public class FishingWorldController : MonoBehaviour
             net.NetworkMessageReceived += OnNetworkMessage;
             net.PlayerJoined += OnPlayerJoined;
         }
-        RefreshBoard();
+        RefreshRecent();
+        RefreshZukan();
+        SetRankingText("<b>レベルランキング</b>\n<color=#7A8A80>読み込み中…</color>");
+        SetZukanStatus("この訪問の記録");
         SetStandText("ボタンを押すと釣り竿が出るよ");
     }
 
@@ -80,6 +139,25 @@ public class FishingWorldController : MonoBehaviour
             standMessageUntil = 0f;
             SetStandText("ボタンを押すと釣り竿が出るよ");
         }
+        CheckBackend();
+    }
+
+    /// <summary>FishingBackend calls this every frame it runs.</summary>
+    public void BackendHeartbeat()
+    {
+        backendSeenAt = Time.time;
+    }
+
+    // FishingBackend is switched off when its permissions were refused; it can't say so itself, so
+    // notice it going quiet.
+    private void CheckBackend()
+    {
+        if (BackendExpected == 0 || PermissionNote == null) return;
+        bool missing = Time.time - startedAt > BackendGraceSeconds && Time.time - backendSeenAt > 3f;
+        if (missing == backendMissing) return;
+        backendMissing = missing;
+        PermissionNote.text = missing ? "記録サーバーの許可がないため、釣果は保存されません" : "";
+        if (missing) SetZukanStatus("記録サーバーの許可がありません（この訪問の記録のみ）");
     }
 
     /// <summary>The button on the stand. Public so it can be pressed from the editor.</summary>
@@ -172,7 +250,7 @@ public class FishingWorldController : MonoBehaviour
 
     public float RollSizeCm(int species)
     {
-        // Squared so that big ones are rarer.
+        // t squared, so big ones are rarer. The crowns below rely on this distribution.
         float t = Random.Range(0f, 1f);
         return Mathf.Lerp(SpeciesMinCm[species], SpeciesMaxCm[species], t * t);
     }
@@ -182,20 +260,76 @@ public class FishingWorldController : MonoBehaviour
         return species >= 0 && species < SpeciesRare.Length && SpeciesRare[species] != 0;
     }
 
+    public int SpeciesIndex(string name)
+    {
+        for (int i = 0; i < SpeciesNames.Length; i++)
+        {
+            if (SpeciesNames[i] == name) return i;
+        }
+        return -1;
+    }
+
+    // Where a size sits in the species' range, 0 (smallest) to 1 (largest).
+    private float SizeFraction(int species, float cm)
+    {
+        float span = SpeciesMaxCm[species] - SpeciesMinCm[species];
+        if (span <= 0f) return 0f;
+        return Mathf.Clamp01((cm - SpeciesMinCm[species]) / span);
+    }
+
+    // Sizes are drawn as min + span * t^2 with t uniform, so P(size <= s) = sqrt(fraction):
+    // the largest p of catches have fraction >= (1 - p)^2, the smallest p have fraction <= p^2.
+    // 2 = gold, 1 = silver, 0 = none.
+    public int LargeCrown(int species, float cm)
+    {
+        float fraction = SizeFraction(species, cm);
+        float gold = 1f - CrownGoldPercent * 0.01f;
+        float silver = 1f - CrownSilverPercent * 0.01f;
+        if (fraction >= gold * gold) return 2;
+        if (fraction >= silver * silver) return 1;
+        return 0;
+    }
+
+    public int SmallCrown(int species, float cm)
+    {
+        float fraction = SizeFraction(species, cm);
+        float gold = CrownGoldPercent * 0.01f;
+        float silver = CrownSilverPercent * 0.01f;
+        if (fraction <= gold * gold) return 2;
+        if (fraction <= silver * silver) return 1;
+        return 0;
+    }
+
+    public int RewardExp(int species, float cm)
+    {
+        return Mathf.RoundToInt(SpeciesBaseExp[species] * (1f + RewardSizeBonus * SizeFraction(species, cm)));
+    }
+
+    public int RewardMoney(int species, float cm)
+    {
+        return Mathf.RoundToInt(SpeciesBaseMoney[species] * (1f + RewardSizeBonus * SizeFraction(species, cm)));
+    }
+
     /// <summary>Called by a rod on every client when a fish is landed.</summary>
     public void ReportCatch(int species, float cm, ushort sender, bool local)
     {
-        if (species < 0 || species >= counts.Length) return;
-        counts[species]++;
+        if (species < 0 || species >= SpeciesNames.Length) return;
 
         string who = local ? LocalName() : RemoteName(sender);
         for (int i = RecentCount - 1; i > 0; i--) recent[i] = recent[i - 1];
         string mark = IsRare(species) ? "<color=#E0A100>★</color> " : "";
-        recent[0] = mark + "<b>" + SpeciesNames[species] + "</b> " + Mathf.RoundToInt(cm) + "cm  <color=#7A8A80>" + who + "</color>";
-        RefreshBoard();
+        recent[0] = mark + "<b>" + SpeciesNames[species] + "</b> " + Mathf.RoundToInt(cm) + "cm  <color=#7A8A80><noparse>" + who + "</noparse></color>";
+        RefreshRecent();
 
         SetStandText(SpeciesNames[species] + " " + Mathf.RoundToInt(cm) + "cm!");
         standMessageUntil = Time.time + 4f;
+
+        if (local)
+        {
+            AddToZukan(species, 1, cm, cm);
+            RefreshZukan();
+            QueueCatch(species, cm);
+        }
     }
 
     private string LocalName()
@@ -212,36 +346,140 @@ public class FishingWorldController : MonoBehaviour
         return player.DisplayName;
     }
 
-    private void RefreshBoard()
+    // ---- Catches waiting for the server (FishingBackend pulls these) ----
+
+    private void QueueCatch(int species, float cm)
     {
-        if (RecentText != null)
+        if (pendingLength == PendingCapacity)
         {
-            StringBuilder builder = new StringBuilder();
-            builder.Append("<b>さいきんの釣果</b>\n");
-            bool any = false;
-            for (int i = 0; i < RecentCount; i++)
-            {
-                if (recent[i].Length == 0) continue;
-                builder.Append(recent[i]);
-                builder.Append("\n");
-                any = true;
-            }
-            if (!any) builder.Append("<color=#7A8A80>まだ誰も釣っていないよ</color>");
-            RecentText.text = builder.ToString();
+            // Full (server unreachable for a long time): drop the oldest.
+            pendingStart = (pendingStart + 1) % PendingCapacity;
+            pendingLength--;
         }
-        if (CountsText != null)
+        int slot = (pendingStart + pendingLength) % PendingCapacity;
+        pendingSpecies[slot] = species;
+        pendingCm[slot] = cm;
+        pendingLength++;
+    }
+
+    public int PendingCatchCount()
+    {
+        return pendingLength;
+    }
+
+    public string PendingFishName()
+    {
+        return SpeciesNames[pendingSpecies[pendingStart]];
+    }
+
+    public float PendingSizeCm()
+    {
+        return pendingCm[pendingStart];
+    }
+
+    public int PendingExp()
+    {
+        return RewardExp(pendingSpecies[pendingStart], pendingCm[pendingStart]);
+    }
+
+    public int PendingMoney()
+    {
+        return RewardMoney(pendingSpecies[pendingStart], pendingCm[pendingStart]);
+    }
+
+    public void PopPendingCatch()
+    {
+        if (pendingLength == 0) return;
+        pendingStart = (pendingStart + 1) % PendingCapacity;
+        pendingLength--;
+    }
+
+    // ---- Encyclopedia (FishingBackend pushes the server's copy here) ----
+
+    private void AddToZukan(int species, int count, float min, float max)
+    {
+        if (myCount[species] == 0)
         {
-            StringBuilder builder = new StringBuilder();
-            builder.Append("<b>図鑑</b>\n");
-            for (int i = 0; i < SpeciesNames.Length; i++)
-            {
-                builder.Append(counts[i] > 0 ? SpeciesNames[i] : "？？？");
-                builder.Append("  ×");
-                builder.Append(counts[i]);
-                builder.Append("\n");
-            }
-            CountsText.text = builder.ToString();
+            myMin[species] = min;
+            myMax[species] = max;
         }
+        else
+        {
+            if (min < myMin[species]) myMin[species] = min;
+            if (max > myMax[species]) myMax[species] = max;
+        }
+        myCount[species] += count;
+    }
+
+    /// <summary>Starts replacing the encyclopedia with the server's copy.</summary>
+    public void BeginServerZukan()
+    {
+        for (int i = 0; i < myCount.Length; i++) myCount[i] = 0;
+    }
+
+    /// <summary>One species from the server; names not in the fish data are ignored.</summary>
+    public void ServerZukanEntry(string fishName, int count, float minCm, float maxCm)
+    {
+        int species = SpeciesIndex(fishName);
+        if (species < 0 || count <= 0) return;
+        AddToZukan(species, count, minCm, maxCm);
+    }
+
+    public void EndServerZukan()
+    {
+        RefreshZukan();
+    }
+
+    public void SetZukanStatus(string text)
+    {
+        if (ZukanStatus != null) ZukanStatus.text = text;
+    }
+
+    public void SetRankingText(string text)
+    {
+        if (RankingText != null) RankingText.text = text;
+    }
+
+    private void RefreshZukan()
+    {
+        for (int i = 0; i < SpeciesNames.Length && i < ZukanName.Length; i++)
+        {
+            bool caught = myCount[i] > 0;
+            ZukanName[i].text = caught ? SpeciesNames[i] : "？？？";
+            ZukanCount[i].text = caught ? "×" + myCount[i] : "-";
+            ZukanMax[i].text = caught ? FormatCm(myMax[i]) : "-";
+            ZukanMin[i].text = caught ? FormatCm(myMin[i]) : "-";
+            int large = caught ? LargeCrown(i, myMax[i]) : 0;
+            int small = caught ? SmallCrown(i, myMin[i]) : 0;
+            ZukanMaxGold[i].SetActive(large == 2);
+            ZukanMaxSilver[i].SetActive(large == 1);
+            ZukanMinGold[i].SetActive(small == 2);
+            ZukanMinSilver[i].SetActive(small == 1);
+        }
+    }
+
+    // One decimal, always with a dot (ToString would follow the player's locale).
+    public static string FormatCm(float cm)
+    {
+        int tenths = Mathf.RoundToInt(cm * 10f);
+        return (tenths / 10) + "." + (tenths % 10) + "cm";
+    }
+
+    private void RefreshRecent()
+    {
+        if (RecentText == null) return;
+        StringBuilder builder = new StringBuilder();
+        builder.Append("<b>さいきんの釣果</b>\n");
+        bool any = false;
+        for (int i = 0; i < RecentCount; i++)
+        {
+            if (recent[i].Length == 0) continue;
+            builder.Append(recent[i]);
+            builder.Append("\n");
+            any = true;
+        }
+        if (!any) builder.Append("<color=#7A8A80>まだ誰も釣っていないよ</color>");
+        RecentText.text = builder.ToString();
     }
 
     private void SetStandText(string text)
@@ -255,22 +493,16 @@ public class FishingWorldController : MonoBehaviour
     {
         if (player == null || net == null || !net.IsOwnedLocallyOnServer) return;
 
-        // [MsgSnapshot, mask (4 bytes), count per species (2 bytes each), then the recent lines as UTF-8]
+        // [MsgSnapshot, mask (4 bytes), then the recent lines as UTF-8]
         string joined = string.Join("\n", recent);
         byte[] text = Encoding.UTF8.GetBytes(joined);
-        int header = 5 + counts.Length * 2;
-        byte[] buffer = new byte[header + text.Length];
+        byte[] buffer = new byte[5 + text.Length];
         buffer[0] = MsgSnapshot;
         buffer[1] = (byte)(activeMask & 0xFF);
         buffer[2] = (byte)((activeMask >> 8) & 0xFF);
         buffer[3] = (byte)((activeMask >> 16) & 0xFF);
         buffer[4] = (byte)((activeMask >> 24) & 0xFF);
-        for (int i = 0; i < counts.Length; i++)
-        {
-            buffer[5 + i * 2] = (byte)(counts[i] & 0xFF);
-            buffer[6 + i * 2] = (byte)((counts[i] >> 8) & 0xFF);
-        }
-        for (int i = 0; i < text.Length; i++) buffer[header + i] = text[i];
+        for (int i = 0; i < text.Length; i++) buffer[5 + i] = text[i];
         net.SendCustomNetworkEvent(buffer, DeliveryMethod.ReliableOrdered, new ushort[] { player.playerId });
     }
 
@@ -282,24 +514,18 @@ public class FishingWorldController : MonoBehaviour
         {
             ActivateRod(buffer[1], buffer[2]);
         }
-        else if (buffer[0] == MsgSnapshot)
+        else if (buffer[0] == MsgSnapshot && buffer.Length >= 5)
         {
-            int header = 5 + counts.Length * 2;
-            if (buffer.Length < header) return;
             int mask = buffer[1] | (buffer[2] << 8) | (buffer[3] << 16) | (buffer[4] << 24);
             for (int i = 0; i < Rods.Length; i++)
             {
                 // Rods already out keep the pose their pickup sync gives them.
                 if ((mask & (1 << i)) != 0) ActivateRod(i, -1);
             }
-            for (int i = 0; i < counts.Length; i++)
-            {
-                counts[i] = buffer[5 + i * 2] | (buffer[6 + i * 2] << 8);
-            }
-            string joined = Encoding.UTF8.GetString(buffer, header, buffer.Length - header);
+            string joined = Encoding.UTF8.GetString(buffer, 5, buffer.Length - 5);
             string[] lines = joined.Split('\n');
             for (int i = 0; i < RecentCount; i++) recent[i] = i < lines.Length ? lines[i] : "";
-            RefreshBoard();
+            RefreshRecent();
         }
     }
 }

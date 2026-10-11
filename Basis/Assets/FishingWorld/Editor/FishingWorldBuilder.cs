@@ -44,12 +44,73 @@ public static partial class FishingWorldBuilder
     static readonly Vector3 StandPosition = new Vector3(2.4f, 0f, -15f);
     static readonly Vector3 BoardPosition = new Vector3(5.2f, 0f, -15.6f);
 
-    static readonly string[] SpeciesNames = { "フナ", "コイ", "ニジマス", "ナマズ", "金のコイ", "長靴" };
-    static readonly float[] SpeciesWeights = { 35f, 25f, 20f, 12f, 6f, 2f };
-    static readonly float[] SpeciesMinCm = { 12f, 30f, 20f, 35f, 40f, 26f };
-    static readonly float[] SpeciesMaxCm = { 28f, 75f, 50f, 90f, 80f, 30f };
-    static readonly int[] SpeciesRare = { 0, 0, 0, 0, 1, 0 };
-    static readonly float[] ModelLengthCm = { 20f, 40f, 30f, 50f, 40f, 30f };
+    static readonly Vector3 ZukanPosition = new Vector3(-1.9f, 0f, -15.2f);
+
+    const string FishDataPath = Root + "/Data/fish.json";
+    const string BackendDataPath = Root + "/Data/backend.json";
+
+    // The fish table and the server settings, edited by hand in Data/ (see Data/README.md).
+    [System.Serializable]
+    class FishData
+    {
+        public float rewardSizeBonus = 1f;
+        public float crownGoldPercent = 5f;
+        public float crownSilverPercent = 10f;
+        public FishEntry[] fish;
+    }
+
+    [System.Serializable]
+    class FishEntry
+    {
+        public string name;
+        public float weight;
+        public float minCm;
+        public float maxCm;
+        public bool rare;
+        public int baseExp;
+        public int baseMoney;
+        public FishModel model;
+    }
+
+    [System.Serializable]
+    class FishModel
+    {
+        public string type = "fish";
+        public float lengthCm = 30f;
+        public float width = 0.06f;
+        public float height = 0.09f;
+        public string body = "8E9C5E";
+        public string belly = "DCD5A3";
+        public string fin = "6F7D45";
+        public string patch = "";
+        public string stripe = "";
+        public bool whiskers;
+    }
+
+    [System.Serializable]
+    class BackendData
+    {
+        public string apiBaseUrl = "";
+        public int rankingLimit = 10;
+        public float rankingRefreshSeconds = 60f;
+        public string editorTestUserId = "";
+    }
+
+    static FishData fishData;
+
+    static FishData LoadFishData()
+    {
+        FishData data = JsonUtility.FromJson<FishData>(File.ReadAllText(FishDataPath));
+        if (data == null || data.fish == null || data.fish.Length == 0) throw new System.Exception(FishDataPath + ": no fish");
+        foreach (FishEntry fish in data.fish)
+        {
+            if (string.IsNullOrEmpty(fish.name)) throw new System.Exception(FishDataPath + ": a fish has no name");
+            if (fish.maxCm < fish.minCm || fish.minCm <= 0f) throw new System.Exception(FishDataPath + ": " + fish.name + " needs 0 < minCm <= maxCm");
+            if (fish.weight < 0f) throw new System.Exception(FishDataPath + ": " + fish.name + " has a negative weight");
+            if (fish.model == null) fish.model = new FishModel();
+        }
+        return data;
+    }
 
     static Dictionary<string, Material> materials;
     static Mesh blobA, blobB, blobC, cone, prism6, prism24;
@@ -86,6 +147,8 @@ public static partial class FishingWorldBuilder
         AudioClip music = SaveSound("forest-bgm", FishingWorldMusic.Render(), FishingWorldMusic.Rate);
         SetMusicImport(music);
 
+        fishData = LoadFishData();
+        BackendData backend = JsonUtility.FromJson<BackendData>(File.ReadAllText(BackendDataPath));
         TMP_FontAsset font = JapaneseFont();
         string contentGroupId = ExistingContentGroupId();
 
@@ -125,6 +188,15 @@ public static partial class FishingWorldBuilder
 
         FishingWorldController controller = BuildStand(world.transform, font, click);
         BuildBoard(world.transform, font, controller);
+        BuildZukanBoard(world.transform, font, controller);
+
+        FishingBackend server = controller.gameObject.AddComponent<FishingBackend>();
+        server.Controller = controller;
+        server.ApiBaseUrl = (backend.apiBaseUrl ?? "").Trim().TrimEnd('/');
+        server.RankingLimit = backend.rankingLimit;
+        server.RankingRefreshSeconds = backend.rankingRefreshSeconds;
+        server.EditorTestUserId = backend.editorTestUserId ?? "";
+        controller.BackendExpected = server.ApiBaseUrl.Length > 0 ? 1 : 0;
 
         Transform rods = Group(world.transform, "Rods");
         controller.Rods = new FishingRod[RodCount];
@@ -304,6 +376,7 @@ public static partial class FishingWorldBuilder
             if (Mathf.Abs(p.x) < 3.2f && p.z < -6f && p.z > -24f) continue;
             if ((p - StandPosition).sqrMagnitude < 2.6f * 2.6f) continue;
             if ((p - BoardPosition).sqrMagnitude < 2.2f * 2.2f) continue;
+            if ((p - ZukanPosition).sqrMagnitude < 2.2f * 2.2f) continue;
             if ((p - SpawnPosition).sqrMagnitude < 4f * 4f) continue;
 
             bool tooClose = false;
@@ -386,7 +459,7 @@ public static partial class FishingWorldBuilder
             float r = 7.8f + (float)random.NextDouble() * 24f;
             Vector3 p = new Vector3(Mathf.Cos(a) * r, 0f, Mathf.Sin(a) * r);
             bool onPath = Mathf.Abs(p.x) < 1.6f && p.z < -6f && p.z > -22f;
-            if ((p - StandPosition).sqrMagnitude < 1.5f * 1.5f || (p - BoardPosition).sqrMagnitude < 1.5f * 1.5f) continue;
+            if ((p - StandPosition).sqrMagnitude < 1.5f * 1.5f || (p - BoardPosition).sqrMagnitude < 1.5f * 1.5f || (p - ZukanPosition).sqrMagnitude < 1.6f * 1.6f) continue;
             p = OnGround(p);
             double kind = random.NextDouble();
             if (kind < 0.3)
@@ -517,6 +590,25 @@ public static partial class FishingWorldBuilder
         Place(title, new Vector3(0f, 1.78f, 0.485f));
         TextMeshPro hint = Text(stand, "Stand Hint", font, "", 1.3f, new Vector2(2.2f, 0.2f), Hex("6B4A2E"));
         Place(hint, new Vector3(0f, 1.27f, 0.485f));
+        TextMeshPro note = Text(stand, "Permission Note", font, "", 0.85f, new Vector2(2.2f, 0.12f), Hex("B5651D"));
+        Place(note, new Vector3(0f, 1.0f, 0.485f));
+
+        // In front of the rack, over the button: up unless the world's scripts start (they hide it),
+        // so it needs no script to say that they are not running.
+        Transform warning = new GameObject("Script Warning").transform;
+        warning.SetParent(stand, false);
+        warning.localPosition = new Vector3(0f, 1.42f, 0.33f);
+        Box(warning, "Border", Vector3.zero, new Vector3(2.2f, 0.92f, 0.02f), Quaternion.identity, Mat("Warning Border", Hex("D9534F")), false).transform.localPosition = new Vector3(0f, 0f, 0.012f);
+        Box(warning, "Panel", Vector3.zero, new Vector3(2.12f, 0.84f, 0.02f), Quaternion.identity, Mat("Warning Panel", Hex("FDE3E0")), false).transform.localPosition = Vector3.zero;
+        TextMeshPro warningText = Text(warning, "Text", font,
+            "<size=135%><b>！ スクリプトが動いていません</b></size>\n" +
+            "このワールドの釣り（竿・ボタン・ボード）は使えません。\n" +
+            "スクリプトの許可が必要です。\n" +
+            "拒否した場合は、Basis を再起動してワールドに入り直し、\n" +
+            "「許可」を選んでください。",
+            0.62f, new Vector2(2.02f, 0.78f), Hex("8A1C1C"));
+        warningText.textWrappingMode = TextWrappingModes.NoWrap;
+        Place(warningText, new Vector3(0f, 0f, -0.015f));
 
         // Rods appear on the table, side by side, tips to the right.
         Transform spawnPoint = new GameObject("Rod Spawn Point").transform;
@@ -533,11 +625,19 @@ public static partial class FishingWorldBuilder
         controller.RodSlots = RodSlots;
         controller.RodLayerMask = 1 << InteractableLayer;
         controller.StandText = hint;
-        controller.SpeciesNames = SpeciesNames;
-        controller.SpeciesWeights = SpeciesWeights;
-        controller.SpeciesMinCm = SpeciesMinCm;
-        controller.SpeciesMaxCm = SpeciesMaxCm;
-        controller.SpeciesRare = SpeciesRare;
+        controller.ScriptWarning = warning.gameObject;
+        controller.PermissionNote = note;
+        FishEntry[] fish = fishData.fish;
+        controller.SpeciesNames = System.Array.ConvertAll(fish, f => f.name);
+        controller.SpeciesWeights = System.Array.ConvertAll(fish, f => f.weight);
+        controller.SpeciesMinCm = System.Array.ConvertAll(fish, f => f.minCm);
+        controller.SpeciesMaxCm = System.Array.ConvertAll(fish, f => f.maxCm);
+        controller.SpeciesRare = System.Array.ConvertAll(fish, f => f.rare ? 1 : 0);
+        controller.SpeciesBaseExp = System.Array.ConvertAll(fish, f => f.baseExp);
+        controller.SpeciesBaseMoney = System.Array.ConvertAll(fish, f => f.baseMoney);
+        controller.RewardSizeBonus = fishData.rewardSizeBonus;
+        controller.CrownGoldPercent = fishData.crownGoldPercent;
+        controller.CrownSilverPercent = fishData.crownSilverPercent;
         controller.SpawnPuff = Particles(stand, "Spawn Puff", Hex("FFFFFF"), Hex("FFE3EE"), 30, 0.8f, 0.6f, 0.05f, 0.1f, -0.1f, 0.3f);
         controller.ButtonAudio = Audio(button.transform, 0.9f);
         controller.ButtonClip = click;
@@ -550,23 +650,131 @@ public static partial class FishingWorldBuilder
         board.position = OnGround(BoardPosition);
         board.rotation = Quaternion.Euler(0f, 18f, 0f);
         Material wood = Mat("Stand Wood Dark", Hex("BF946B"));
-        Local(Box(board, "Post", Vector3.zero, new Vector3(0.1f, 2.2f, 0.1f), Quaternion.identity, wood, true), new Vector3(-1.05f, 1.1f, 0.05f));
-        Local(Box(board, "Post", Vector3.zero, new Vector3(0.1f, 2.2f, 0.1f), Quaternion.identity, wood, true), new Vector3(1.05f, 1.1f, 0.05f));
-        Local(Box(board, "Panel", Vector3.zero, new Vector3(2.3f, 1.35f, 0.06f), Quaternion.identity, Mat("Board", Hex("FFF8EC")), true), new Vector3(0f, 1.45f, 0f));
-        Local(Box(board, "Frame Top", Vector3.zero, new Vector3(2.4f, 0.08f, 0.1f), Quaternion.identity, wood, false), new Vector3(0f, 2.15f, 0f));
-        Local(Box(board, "Frame Bottom", Vector3.zero, new Vector3(2.4f, 0.08f, 0.1f), Quaternion.identity, wood, false), new Vector3(0f, 0.75f, 0f));
+        Local(Box(board, "Post", Vector3.zero, new Vector3(0.1f, 2.5f, 0.1f), Quaternion.identity, wood, true), new Vector3(-1.3f, 1.25f, 0.05f));
+        Local(Box(board, "Post", Vector3.zero, new Vector3(0.1f, 2.5f, 0.1f), Quaternion.identity, wood, true), new Vector3(1.3f, 1.25f, 0.05f));
+        Local(Box(board, "Panel", Vector3.zero, new Vector3(2.8f, 1.7f, 0.06f), Quaternion.identity, Mat("Board", Hex("FFF8EC")), true), new Vector3(0f, 1.55f, 0f));
+        Local(Box(board, "Frame Top", Vector3.zero, new Vector3(2.9f, 0.08f, 0.1f), Quaternion.identity, wood, false), new Vector3(0f, 2.43f, 0f));
+        Local(Box(board, "Frame Bottom", Vector3.zero, new Vector3(2.9f, 0.08f, 0.1f), Quaternion.identity, wood, false), new Vector3(0f, 0.67f, 0f));
+        Local(Box(board, "Divider", Vector3.zero, new Vector3(0.02f, 1.5f, 0.07f), Quaternion.identity, wood, false), new Vector3(0.15f, 1.55f, 0f));
 
-        TextMeshPro recent = Text(board, "Recent", font, "", 0.9f, new Vector2(1.38f, 1.15f), Hex("4A5A50"));
+        TextMeshPro recent = Text(board, "Recent", font, "", 0.9f, new Vector2(1.45f, 1.5f), Hex("4A5A50"));
         recent.alignment = TextAlignmentOptions.TopLeft;
         // One catch per line: long player names are cut off rather than wrapped off the panel.
         recent.textWrappingMode = TextWrappingModes.NoWrap;
         recent.overflowMode = TextOverflowModes.Ellipsis;
-        Place(recent, new Vector3(-0.4f, 1.45f, -0.035f));
-        TextMeshPro counts = Text(board, "Counts", font, "", 0.9f, new Vector2(0.72f, 1.15f), Hex("4A5A50"));
-        counts.alignment = TextAlignmentOptions.TopLeft;
-        Place(counts, new Vector3(0.68f, 1.45f, -0.035f));
+        Place(recent, new Vector3(-0.6f, 1.55f, -0.035f));
+        TextMeshPro ranking = Text(board, "Ranking", font, "", 0.78f, new Vector2(1.15f, 1.5f), Hex("4A5A50"));
+        ranking.alignment = TextAlignmentOptions.TopLeft;
+        ranking.textWrappingMode = TextWrappingModes.NoWrap;
+        ranking.overflowMode = TextOverflowModes.Ellipsis;
+        Place(ranking, new Vector3(0.78f, 1.55f, -0.035f));
         controller.RecentText = recent;
-        controller.CountsText = counts;
+        controller.RankingText = ranking;
+    }
+
+    // The local player's encyclopedia: a row per species with count, largest and smallest size,
+    // and a gold or silver crown beside a size among the largest/smallest few percent.
+    static void BuildZukanBoard(Transform parent, TMP_FontAsset font, FishingWorldController controller)
+    {
+        FishEntry[] fish = fishData.fish;
+        int rows = fish.Length;
+        const float rowHeight = 0.15f;
+        float panelHeight = 0.5f + rows * rowHeight;
+        float panelCenter = 0.75f + panelHeight * 0.5f;
+
+        Transform board = Group(parent, "Zukan Board");
+        board.position = OnGround(ZukanPosition);
+        board.rotation = Quaternion.Euler(0f, -15f, 0f);
+        Material wood = Mat("Stand Wood Dark", Hex("BF946B"));
+        float postHeight = panelCenter + panelHeight * 0.5f + 0.1f;
+        Local(Box(board, "Post", Vector3.zero, new Vector3(0.1f, postHeight, 0.1f), Quaternion.identity, wood, true), new Vector3(-1.25f, postHeight * 0.5f, 0.05f));
+        Local(Box(board, "Post", Vector3.zero, new Vector3(0.1f, postHeight, 0.1f), Quaternion.identity, wood, true), new Vector3(1.25f, postHeight * 0.5f, 0.05f));
+        Local(Box(board, "Panel", Vector3.zero, new Vector3(2.4f, panelHeight, 0.06f), Quaternion.identity, Mat("Board Mint", Hex("F1FAF2")), true), new Vector3(0f, panelCenter, 0f));
+        Local(Box(board, "Frame Top", Vector3.zero, new Vector3(2.5f, 0.08f, 0.1f), Quaternion.identity, wood, false), new Vector3(0f, panelCenter + panelHeight * 0.5f, 0f));
+        Local(Box(board, "Frame Bottom", Vector3.zero, new Vector3(2.5f, 0.08f, 0.1f), Quaternion.identity, wood, false), new Vector3(0f, panelCenter - panelHeight * 0.5f, 0f));
+
+        float top = panelCenter + panelHeight * 0.5f - 0.12f;
+        Color ink = Hex("4A5A50");
+        Color faint = Hex("7A8A80");
+        TextMeshPro title = Text(board, "Title", font, "<b>あなたの図鑑</b>", 1.1f, new Vector2(1.4f, 0.16f), ink);
+        title.alignment = TextAlignmentOptions.Left;
+        Place(title, new Vector3(-0.42f, top, -0.035f));
+        TextMeshPro status = Text(board, "Status", font, "", 0.6f, new Vector2(1.2f, 0.12f), faint);
+        status.alignment = TextAlignmentOptions.Right;
+        status.textWrappingMode = TextWrappingModes.NoWrap;
+        status.overflowMode = TextOverflowModes.Ellipsis;
+        Place(status, new Vector3(0.5f, top, -0.035f));
+        controller.ZukanStatus = status;
+
+        // Columns: name | count | largest + crown | smallest + crown.
+        float nameX = -1.1f, countX = -0.18f, maxX = 0.25f, minX = 0.82f;
+        float headerY = top - 0.17f;
+        Header(board, font, "なまえ", nameX, headerY, faint, TextAlignmentOptions.Left);
+        Header(board, font, "釣った数", countX, headerY, faint, TextAlignmentOptions.Right);
+        Header(board, font, "最大", maxX, headerY, faint, TextAlignmentOptions.Right);
+        Header(board, font, "最小", minX, headerY, faint, TextAlignmentOptions.Right);
+
+        controller.ZukanName = new TextMeshPro[rows];
+        controller.ZukanCount = new TextMeshPro[rows];
+        controller.ZukanMax = new TextMeshPro[rows];
+        controller.ZukanMin = new TextMeshPro[rows];
+        controller.ZukanMaxGold = new GameObject[rows];
+        controller.ZukanMaxSilver = new GameObject[rows];
+        controller.ZukanMinGold = new GameObject[rows];
+        controller.ZukanMinSilver = new GameObject[rows];
+        Material gold = Mat("Crown Gold", Hex("F2C230"));
+        Material silver = Mat("Crown Silver", Hex("C8D0D8"));
+        for (int i = 0; i < rows; i++)
+        {
+            float y = headerY - 0.17f - i * rowHeight;
+            controller.ZukanName[i] = Cell(board, font, "Name " + i, nameX, y, 0.8f, ink, TextAlignmentOptions.Left);
+            controller.ZukanCount[i] = Cell(board, font, "Count " + i, countX, y, 0.4f, ink, TextAlignmentOptions.Right);
+            controller.ZukanMax[i] = Cell(board, font, "Max " + i, maxX, y, 0.45f, ink, TextAlignmentOptions.Right);
+            controller.ZukanMin[i] = Cell(board, font, "Min " + i, minX, y, 0.45f, ink, TextAlignmentOptions.Right);
+            controller.ZukanMaxGold[i] = Crown(board, "Max Gold " + i, new Vector3(maxX + 0.13f, y, -0.06f), gold);
+            controller.ZukanMaxSilver[i] = Crown(board, "Max Silver " + i, new Vector3(maxX + 0.13f, y, -0.06f), silver);
+            controller.ZukanMinGold[i] = Crown(board, "Min Gold " + i, new Vector3(minX + 0.13f, y, -0.06f), gold);
+            controller.ZukanMinSilver[i] = Crown(board, "Min Silver " + i, new Vector3(minX + 0.13f, y, -0.06f), silver);
+        }
+    }
+
+    // A text cell whose anchor x is its left edge (left aligned) or right edge (right aligned).
+    static TextMeshPro Cell(Transform board, TMP_FontAsset font, string name, float x, float y, float width, Color color, TextAlignmentOptions alignment)
+    {
+        TextMeshPro text = Text(board, name, font, "", 0.85f, new Vector2(width, 0.14f), color);
+        text.alignment = alignment;
+        text.textWrappingMode = TextWrappingModes.NoWrap;
+        text.overflowMode = TextOverflowModes.Ellipsis;
+        bool left = alignment == TextAlignmentOptions.Left;
+        Place(text, new Vector3(left ? x + width * 0.5f : x - width * 0.5f, y, -0.035f));
+        return text;
+    }
+
+    static void Header(Transform board, TMP_FontAsset font, string label, float x, float y, Color color, TextAlignmentOptions alignment)
+    {
+        TextMeshPro text = Cell(board, font, "Header " + label, x, y, 0.5f, color, alignment);
+        text.fontSize = 0.6f;
+        text.text = label;
+    }
+
+    // A small low-poly crown: a band with three points, hidden until the controller shows it.
+    static GameObject Crown(Transform parent, string name, Vector3 localPosition, Material material)
+    {
+        Transform crown = new GameObject(name).transform;
+        crown.SetParent(parent, false);
+        crown.localPosition = localPosition;
+        crown.localScale = Vector3.one * 1.7f;
+        GameObject band = MeshObject(crown, "Band", prism6, material, Vector3.zero, Vector3.one, Quaternion.identity);
+        band.transform.localPosition = new Vector3(0f, -0.025f, 0f);
+        band.transform.localScale = new Vector3(0.05f, 0.03f, 0.03f);
+        for (int k = -1; k <= 1; k++)
+        {
+            GameObject point = MeshObject(crown, "Point", cone, material, Vector3.zero, Vector3.one, Quaternion.identity);
+            point.transform.localPosition = new Vector3(k * 0.032f, -0.01f, 0f);
+            point.transform.localScale = new Vector3(0.016f, k == 0 ? 0.05f : 0.038f, 0.016f);
+        }
+        crown.gameObject.SetActive(false);
+        return crown.gameObject;
     }
 
     // ---------------------------------------------------------------- rods and fish
@@ -668,7 +876,7 @@ public static partial class FishingWorldBuilder
         rod.Bobber = bobber;
         rod.FishRoot = fishRoot;
         rod.FishModels = models;
-        rod.FishModelLengthCm = ModelLengthCm;
+        rod.FishModelLengthCm = System.Array.ConvertAll(fishData.fish, f => f.model.lengthCm);
         rod.Splash = Particles(go.transform, "Splash", Hex("FFFFFF"), Hex("BFE6FF"), 26, 0.8f, 2.6f, 0.03f, 0.07f, 1f, 0.12f);
         rod.Sparkle = Particles(fishRoot, "Sparkle", Hex("FFF3A0"), Hex("FFD24A"), 0, 0.7f, 0.5f, 0.02f, 0.05f, -0.05f, 0.15f);
         ParticleSystem.EmissionModule sparkleEmission = rod.Sparkle.emission;
@@ -686,35 +894,57 @@ public static partial class FishingWorldBuilder
         return rod;
     }
 
-    /// <summary>One model per species, mouth at the origin, body along -Z, all hidden.</summary>
+    /// <summary>One model per species in Data/fish.json, mouth at the origin, body along -Z, all hidden.</summary>
     static GameObject[] BuildFishModels(Transform parent)
     {
-        GameObject[] models = new GameObject[SpeciesNames.Length];
-        models[0] = Fish(parent, "Funa", 0.2f, 0.05f, 0.09f, "8E9C5E", "DCD5A3", "6F7D45");
-        models[1] = Fish(parent, "Koi", 0.4f, 0.09f, 0.13f, "F28C38", "FFF4E6", "F5A35F");
-        Local(Box(models[1].transform, "Patch", Vector3.zero, new Vector3(0.092f, 0.04f, 0.1f), Quaternion.identity, Mat("Koi Patch", Hex("FFFFFF")), false), new Vector3(0f, 0.05f, -0.15f));
-        models[2] = Fish(parent, "Trout", 0.3f, 0.055f, 0.08f, "9DB8A8", "F4F4F4", "7FA08E");
-        Local(Box(models[2].transform, "Stripe", Vector3.zero, new Vector3(0.058f, 0.018f, 0.2f), Quaternion.identity, Mat("Trout Stripe", Hex("F59AC2")), false), new Vector3(0f, 0.0f, -0.13f));
-        models[3] = Fish(parent, "Catfish", 0.5f, 0.12f, 0.075f, "6E6A72", "CFC8C0", "5A565E");
-        Material whisker = Mat("Whisker", Hex("4A474E"));
-        foreach (float x in new[] { -1f, 1f })
+        FishEntry[] fish = fishData.fish;
+        GameObject[] models = new GameObject[fish.Length];
+        for (int i = 0; i < fish.Length; i++)
         {
-            Local(Box(models[3].transform, "Whisker", Vector3.zero, new Vector3(0.006f, 0.006f, 0.14f), Quaternion.Euler(0f, x * 35f, 0f), whisker, false), new Vector3(x * 0.07f, -0.01f, -0.02f));
-            Local(Box(models[3].transform, "Whisker", Vector3.zero, new Vector3(0.005f, 0.005f, 0.09f), Quaternion.Euler(20f, x * 50f, 0f), whisker, false), new Vector3(x * 0.05f, -0.03f, -0.03f));
+            FishModel m = fish[i].model;
+            string name = "Fish " + i;
+            if (m.type == "boot")
+            {
+                models[i] = Boot(parent, name, m.body, m.belly);
+                continue;
+            }
+            float length = m.lengthCm * 0.01f;
+            models[i] = Fish(parent, name, length, m.width, m.height, m.body, m.belly, m.fin);
+            if (!string.IsNullOrEmpty(m.patch))
+            {
+                Local(Box(models[i].transform, "Patch", Vector3.zero, new Vector3(m.width * 1.02f, m.height * 0.3f, length * 0.25f), Quaternion.identity, ColorMat(m.patch), false), new Vector3(0f, m.height * 0.38f, -length * 0.38f));
+            }
+            if (!string.IsNullOrEmpty(m.stripe))
+            {
+                Local(Box(models[i].transform, "Stripe", Vector3.zero, new Vector3(m.width * 1.05f, m.height * 0.22f, length * 0.66f), Quaternion.identity, ColorMat(m.stripe), false), new Vector3(0f, 0f, -length * 0.43f));
+            }
+            if (m.whiskers)
+            {
+                Material whisker = Mat("Whisker", Hex("4A474E"));
+                foreach (float x in new[] { -1f, 1f })
+                {
+                    Local(Box(models[i].transform, "Whisker", Vector3.zero, new Vector3(0.006f, 0.006f, length * 0.28f), Quaternion.Euler(0f, x * 35f, 0f), whisker, false), new Vector3(x * m.width * 0.58f, -0.01f, -0.02f));
+                    Local(Box(models[i].transform, "Whisker", Vector3.zero, new Vector3(0.005f, 0.005f, length * 0.18f), Quaternion.Euler(20f, x * 50f, 0f), whisker, false), new Vector3(x * m.width * 0.42f, -m.height * 0.4f, -0.03f));
+                }
+            }
         }
-        models[4] = Fish(parent, "Golden Koi", 0.4f, 0.09f, 0.13f, "F7C948", "FFF1B8", "FFB627");
-        models[5] = Boot(parent);
         foreach (GameObject model in models) model.SetActive(false);
         return models;
+    }
+
+    // Fish parts share one material per colour.
+    static Material ColorMat(string hex)
+    {
+        return Mat("Color " + hex.TrimStart('#').ToUpperInvariant(), Hex(hex.TrimStart('#')));
     }
 
     static GameObject Fish(Transform parent, string name, float length, float width, float height, string body, string belly, string fin)
     {
         Transform fish = new GameObject(name).transform;
         fish.SetParent(parent, false);
-        Material bodyMat = Mat("Fish " + name, Hex(body));
-        Material bellyMat = Mat("Fish " + name + " Belly", Hex(belly));
-        Material finMat = Mat("Fish " + name + " Fin", Hex(fin));
+        Material bodyMat = ColorMat(body);
+        Material bellyMat = ColorMat(belly);
+        Material finMat = ColorMat(string.IsNullOrEmpty(fin) ? body : fin);
         Material eye = Mat("Fish Eye", Hex("2B2B33"));
 
         Local(Box(fish, "Head", Vector3.zero, new Vector3(width * 0.85f, height * 0.8f, length * 0.22f), Quaternion.identity, bodyMat, false), new Vector3(0f, 0f, -length * 0.11f));
@@ -732,16 +962,16 @@ public static partial class FishingWorldBuilder
         return fish.gameObject;
     }
 
-    static GameObject Boot(Transform parent)
+    static GameObject Boot(Transform parent, string name, string body, string sole)
     {
-        Transform boot = new GameObject("Boot").transform;
+        Transform boot = new GameObject(name).transform;
         boot.SetParent(parent, false);
-        Material rubber = Mat("Boot", Hex("5E8C61"));
-        Material sole = Mat("Boot Sole", Hex("3F4A40"));
+        Material rubber = ColorMat(body);
+        Material soleMat = ColorMat(string.IsNullOrEmpty(sole) ? "3F4A40" : sole);
         Local(Box(boot, "Leg", Vector3.zero, new Vector3(0.1f, 0.1f, 0.26f), Quaternion.identity, rubber, false), new Vector3(0f, 0f, -0.13f));
         Local(Box(boot, "Foot", Vector3.zero, new Vector3(0.1f, 0.17f, 0.09f), Quaternion.identity, rubber, false), new Vector3(0f, -0.05f, -0.3f));
-        Local(Box(boot, "Sole", Vector3.zero, new Vector3(0.105f, 0.19f, 0.02f), Quaternion.identity, sole, false), new Vector3(0f, -0.05f, -0.35f));
-        Local(Box(boot, "Rim", Vector3.zero, new Vector3(0.11f, 0.11f, 0.03f), Quaternion.identity, sole, false), new Vector3(0f, 0f, -0.01f));
+        Local(Box(boot, "Sole", Vector3.zero, new Vector3(0.105f, 0.19f, 0.02f), Quaternion.identity, soleMat, false), new Vector3(0f, -0.05f, -0.35f));
+        Local(Box(boot, "Rim", Vector3.zero, new Vector3(0.11f, 0.11f, 0.03f), Quaternion.identity, soleMat, false), new Vector3(0f, 0f, -0.01f));
         return boot.gameObject;
     }
 
@@ -999,7 +1229,7 @@ public static partial class FishingWorldBuilder
         font.material.name = "NotoSansJP SDF Material";
         AssetDatabase.AddObjectToAsset(font.material, font);
         // Bake the fixed text in, so it shows even before the dynamic atlas fills.
-        font.TryAddCharacters("釣り竿ボタンを押すと釣り竿が出るよもう全部出ているさいきんの釣果まだ誰も釣っていないよ図鑑？×があなただれかフナコイニジマスナマズ金のコイ長靴cm!★…0123456789()");
+        font.TryAddCharacters("！スクリプトが動いていません使えません許可必要拒否場合再起動入直選記録サーバー保存され釣り竿ボタンを押すと釣り竿が出るよもう全部出ているさいきんの釣果まだ誰も釣っていないよ図鑑？×があなただれかフナコイニジマスナマズ金のコイ長靴cm!★…0123456789()");
         UseWorldTextShader(font);
         EditorUtility.SetDirty(font);
         AssetDatabase.SaveAssets();
