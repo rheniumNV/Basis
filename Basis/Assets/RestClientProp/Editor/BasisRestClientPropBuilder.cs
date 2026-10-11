@@ -29,7 +29,7 @@ public static class BasisRestClientPropBuilder
     const string InitializationScene = "Packages/com.basis.framework/Scenes/initialization.unity";
     const int UILayer = 5;
 
-    static readonly Vector2 PanelSize = new Vector2(640f, 520f);
+    static readonly Vector2 PanelSize = new Vector2(640f, 640f);
     static readonly Vector3 SpawnOffset = new Vector3(0f, 1.4f, 1.5f);
 
     static readonly Color PanelColor = new Color(0.11f, 0.12f, 0.15f, 0.96f);
@@ -109,24 +109,40 @@ public static class BasisRestClientPropBuilder
 
         BasisRestClientProp client = root.AddComponent<BasisRestClientProp>();
 
-        Label(canvasRect, "Title", new Vector2(0f, 230f), new Vector2(600f, 44f), "REST Client", 34, TextAlignmentOptions.Center, FontStyles.Bold);
+        Label(canvasRect, "Title", new Vector2(0f, 280f), new Vector2(600f, 44f), "REST Client", 34, TextAlignmentOptions.Center, FontStyles.Bold);
 
-        Label(canvasRect, "Endpoint Caption", new Vector2(0f, 186f), new Vector2(600f, 24f), "Presets", 18, TextAlignmentOptions.Left, FontStyles.Normal);
-        client.EndpointAButton = MakeButton(canvasRect, "Endpoint A", new Vector2(-200f, 150f), new Vector2(190f, 44f), "httpbin /anything", ButtonColor, 18);
-        client.EndpointBButton = MakeButton(canvasRect, "Endpoint B", new Vector2(0f, 150f), new Vector2(190f, 44f), "jsonplaceholder", ButtonColor, 18);
-        client.EndpointCButton = MakeButton(canvasRect, "Endpoint C", new Vector2(200f, 150f), new Vector2(190f, 44f), "httpbin 418", ButtonColor, 18);
+        client.HttpModeButton = MakeButton(canvasRect, "HTTP Mode", new Vector2(-228f, 232f), new Vector2(136f, 40f), "HTTP", MethodColor, 20);
+        client.UdpModeButton = MakeButton(canvasRect, "UDP Mode", new Vector2(-76f, 232f), new Vector2(136f, 40f), "UDP", ButtonColor, 20);
+        client.ModeOnColor = MethodColor;
+        client.ModeOffColor = ButtonColor;
 
-        client.UrlInput = MakeInputField(canvasRect, "Url", new Vector2(0f, 108f), new Vector2(600f, 36f), "https://...", 18);
+        Label(canvasRect, "Endpoint Caption", new Vector2(0f, 192f), new Vector2(600f, 24f), "Presets", 18, TextAlignmentOptions.Left, FontStyles.Normal);
+        client.EndpointAButton = MakeButton(canvasRect, "Endpoint A", new Vector2(-200f, 156f), new Vector2(190f, 44f), "httpbin /anything", ButtonColor, 18);
+        client.EndpointBButton = MakeButton(canvasRect, "Endpoint B", new Vector2(0f, 156f), new Vector2(190f, 44f), "jsonplaceholder", ButtonColor, 18);
+        client.EndpointCButton = MakeButton(canvasRect, "Endpoint C", new Vector2(200f, 156f), new Vector2(190f, 44f), "httpbin 418", ButtonColor, 18);
 
-        client.GetButton = MakeButton(canvasRect, "GET", new Vector2(-228f, 62f), new Vector2(136f, 50f), "GET", MethodColor, 24);
-        client.PostButton = MakeButton(canvasRect, "POST", new Vector2(-76f, 62f), new Vector2(136f, 50f), "POST", MethodColor, 24);
-        client.PutButton = MakeButton(canvasRect, "PUT", new Vector2(76f, 62f), new Vector2(136f, 50f), "PUT", MethodColor, 24);
-        client.DeleteButton = MakeButton(canvasRect, "DELETE", new Vector2(228f, 62f), new Vector2(136f, 50f), "DELETE", MethodColor, 24);
+        client.UrlInput = MakeInputField(canvasRect, "Url", new Vector2(0f, 110f), new Vector2(600f, 36f), "https://...  or  host:port for UDP", 18);
+        client.PayloadInput = MakeInputField(canvasRect, "Payload", new Vector2(0f, 68f), new Vector2(600f, 36f), "Body (POST/PUT) or UDP message, optional", 18);
 
-        client.StatusText = Label(canvasRect, "Status", new Vector2(0f, 14f), new Vector2(600f, 32f), "", 22, TextAlignmentOptions.Left, FontStyles.Bold);
+        // HTTP method buttons share a parent so the UDP mode can hide them in one go.
+        GameObject methodsGo = new GameObject("HTTP Methods", typeof(RectTransform));
+        methodsGo.layer = UILayer;
+        RectTransform methods = (RectTransform)methodsGo.transform;
+        methods.SetParent(canvasRect, false);
+        methods.sizeDelta = Vector2.zero;
+        client.HttpMethods = methodsGo;
+        client.GetButton = MakeButton(methods, "GET", new Vector2(-228f, 18f), new Vector2(136f, 50f), "GET", MethodColor, 24);
+        client.PostButton = MakeButton(methods, "POST", new Vector2(-76f, 18f), new Vector2(136f, 50f), "POST", MethodColor, 24);
+        client.PutButton = MakeButton(methods, "PUT", new Vector2(76f, 18f), new Vector2(136f, 50f), "PUT", MethodColor, 24);
+        client.DeleteButton = MakeButton(methods, "DELETE", new Vector2(228f, 18f), new Vector2(136f, 50f), "DELETE", MethodColor, 24);
 
-        Panel(canvasRect, "Body Background", new Vector2(0f, -122f), new Vector2(600f, 236f), new Color(0.06f, 0.07f, 0.09f, 1f));
-        client.BodyText = Label(canvasRect, "Body", new Vector2(0f, -122f), new Vector2(584f, 224f), "", 13, TextAlignmentOptions.TopLeft, FontStyles.Normal);
+        client.UdpSendButton = MakeButton(canvasRect, "UDP Send", new Vector2(0f, 18f), new Vector2(600f, 50f), "UDP SEND", MethodColor, 24);
+        client.UdpSendButton.gameObject.SetActive(false);
+
+        client.StatusText = Label(canvasRect, "Status", new Vector2(0f, -30f), new Vector2(600f, 32f), "", 22, TextAlignmentOptions.Left, FontStyles.Bold);
+
+        Panel(canvasRect, "Body Background", new Vector2(0f, -180f), new Vector2(600f, 236f), new Color(0.06f, 0.07f, 0.09f, 1f));
+        client.BodyText = Label(canvasRect, "Body", new Vector2(0f, -180f), new Vector2(584f, 224f), "", 13, TextAlignmentOptions.TopLeft, FontStyles.Normal);
         client.BodyText.overflowMode = TextOverflowModes.Truncate;
         client.BodyText.textWrappingMode = TextWrappingModes.Normal;
 
