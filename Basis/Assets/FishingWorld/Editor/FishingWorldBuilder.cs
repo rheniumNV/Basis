@@ -97,6 +97,8 @@ public static partial class FishingWorldBuilder
     }
 
     static FishData fishData;
+    // The rod stand's permission warning, handed to FishingBackend, which hides it.
+    static GameObject scriptWarning;
 
     static FishData LoadFishData()
     {
@@ -192,11 +194,11 @@ public static partial class FishingWorldBuilder
 
         FishingBackend server = controller.gameObject.AddComponent<FishingBackend>();
         server.Controller = controller;
+        server.ScriptWarning = scriptWarning;
         server.ApiBaseUrl = (backend.apiBaseUrl ?? "").Trim().TrimEnd('/');
         server.RankingLimit = backend.rankingLimit;
         server.RankingRefreshSeconds = backend.rankingRefreshSeconds;
         server.EditorTestUserId = backend.editorTestUserId ?? "";
-        controller.BackendExpected = server.ApiBaseUrl.Length > 0 ? 1 : 0;
 
         Transform rods = Group(world.transform, "Rods");
         controller.Rods = new FishingRod[RodCount];
@@ -590,21 +592,20 @@ public static partial class FishingWorldBuilder
         Place(title, new Vector3(0f, 1.78f, 0.485f));
         TextMeshPro hint = Text(stand, "Stand Hint", font, "", 1.3f, new Vector2(2.2f, 0.2f), Hex("6B4A2E"));
         Place(hint, new Vector3(0f, 1.27f, 0.485f));
-        TextMeshPro note = Text(stand, "Permission Note", font, "", 0.85f, new Vector2(2.2f, 0.12f), Hex("B5651D"));
-        Place(note, new Vector3(0f, 1.0f, 0.485f));
 
-        // In front of the rack, over the button: up unless the world's scripts start (they hide it),
-        // so it needs no script to say that they are not running.
+        // Beside the rod stand, clear of the button: up unless FishingBackend gets past its first
+        // permission-gated call and hides it, so it shows when permission was refused or the
+        // world's scripts do not run at all.
         Transform warning = new GameObject("Script Warning").transform;
         warning.SetParent(stand, false);
-        warning.localPosition = new Vector3(0f, 1.42f, 0.33f);
+        warning.localPosition = new Vector3(-2.387f, 1.089f, -1.632f);
         Box(warning, "Border", Vector3.zero, new Vector3(2.2f, 0.92f, 0.02f), Quaternion.identity, Mat("Warning Border", Hex("D9534F")), false).transform.localPosition = new Vector3(0f, 0f, 0.012f);
         Box(warning, "Panel", Vector3.zero, new Vector3(2.12f, 0.84f, 0.02f), Quaternion.identity, Mat("Warning Panel", Hex("FDE3E0")), false).transform.localPosition = Vector3.zero;
         TextMeshPro warningText = Text(warning, "Text", font,
-            "<size=135%><b>！ スクリプトが動いていません</b></size>\n" +
-            "このワールドの釣り（竿・ボタン・ボード）は使えません。\n" +
-            "スクリプトの許可が必要です。\n" +
-            "拒否した場合は、Basis を再起動してワールドに入り直し、\n" +
+            "<size=135%><b>！ スクリプトが許可されていません</b></size>\n" +
+            "記録の保存・ランキング・振動が使えません。\n" +
+            "このワールドのスクリプトの許可が必要です。\n" +
+            "拒否した場合は、Basis を再接続してワールドに入り直し、\n" +
             "「許可」を選んでください。",
             0.62f, new Vector2(2.02f, 0.78f), Hex("8A1C1C"));
         warningText.textWrappingMode = TextWrappingModes.NoWrap;
@@ -625,8 +626,7 @@ public static partial class FishingWorldBuilder
         controller.RodSlots = RodSlots;
         controller.RodLayerMask = 1 << InteractableLayer;
         controller.StandText = hint;
-        controller.ScriptWarning = warning.gameObject;
-        controller.PermissionNote = note;
+        scriptWarning = warning.gameObject;
         FishEntry[] fish = fishData.fish;
         controller.SpeciesNames = System.Array.ConvertAll(fish, f => f.name);
         controller.SpeciesWeights = System.Array.ConvertAll(fish, f => f.weight);
@@ -670,6 +670,31 @@ public static partial class FishingWorldBuilder
         Place(ranking, new Vector3(0.78f, 1.55f, -0.035f));
         controller.RecentText = recent;
         controller.RankingText = ranking;
+        controller.RankingReloadButton = ReloadButton(board, font, new Vector3(1.12f, 2.25f, -0.06f));
+    }
+
+    // A small physical button with a "再読み込み" label, sitting on a board's face.
+    static BasisInteractableButton ReloadButton(Transform board, TMP_FontAsset font, Vector3 localPosition)
+    {
+        Transform root = new GameObject("Reload Button").transform;
+        root.SetParent(board, false);
+        root.localPosition = localPosition;
+        Color color = Hex("A8D8B9");
+        GameObject cap = Box(root, "Cap", Vector3.zero, new Vector3(0.34f, 0.1f, 0.05f), Quaternion.identity, Mat("Reload Button", color), true);
+        cap.transform.localPosition = Vector3.zero;
+        TextMeshPro label = Text(root, "Label", font, "再読み込み", 0.55f, new Vector2(0.32f, 0.08f), Hex("2F4F3A"));
+        Place(label, new Vector3(0f, 0f, -0.03f));
+
+        BasisInteractableButton button = root.gameObject.AddComponent<BasisInteractableButton>();
+        button.ColliderRef = cap.GetComponent<Collider>();
+        button.RendererRef = cap.GetComponent<MeshRenderer>();
+        button.PropertyName = "_BaseColor";
+        button.Color = color;
+        button.HoverColor = Hex("C6EBD3");
+        button.InteractColor = Hex("86C29C");
+        button.DisabledColor = Hex("C8C8C8");
+        button.InteractRange = 2.5f;
+        return button;
     }
 
     // The local player's encyclopedia: a row per species with count, largest and smallest size,
@@ -703,8 +728,9 @@ public static partial class FishingWorldBuilder
         status.alignment = TextAlignmentOptions.Right;
         status.textWrappingMode = TextWrappingModes.NoWrap;
         status.overflowMode = TextOverflowModes.Ellipsis;
-        Place(status, new Vector3(0.5f, top, -0.035f));
+        Place(status, new Vector3(0.2f, top, -0.035f));
         controller.ZukanStatus = status;
+        controller.ZukanReloadButton = ReloadButton(board, font, new Vector3(0.98f, top - 0.03f, -0.06f));
 
         // Columns: name | count | largest + crown | smallest + crown.
         float nameX = -1.1f, countX = -0.18f, maxX = 0.25f, minX = 0.82f;
@@ -1229,7 +1255,7 @@ public static partial class FishingWorldBuilder
         font.material.name = "NotoSansJP SDF Material";
         AssetDatabase.AddObjectToAsset(font.material, font);
         // Bake the fixed text in, so it shows even before the dynamic atlas fills.
-        font.TryAddCharacters("！スクリプトが動いていません使えません許可必要拒否場合再起動入直選記録サーバー保存され釣り竿ボタンを押すと釣り竿が出るよもう全部出ているさいきんの釣果まだ誰も釣っていないよ図鑑？×があなただれかフナコイニジマスナマズ金のコイ長靴cm!★…0123456789()");
+        font.TryAddCharacters("許可されていません記録保存ランキング図鑑振動再読み込中エラー前回読んだプレイヤーIDを取得しばらくしてから！スクリプトが動いていません使えません許可必要拒否場合再起動入直選記録サーバー保存され釣り竿ボタンを押すと釣り竿が出るよもう全部出ているさいきんの釣果まだ誰も釣っていないよ図鑑？×があなただれかフナコイニジマスナマズ金のコイ長靴cm!★…0123456789()");
         UseWorldTextShader(font);
         EditorUtility.SetDirty(font);
         AssetDatabase.SaveAssets();

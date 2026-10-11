@@ -35,7 +35,7 @@
 
 | 項目 | 意味 |
 |---|---|
-| `apiBaseUrl` | 釣りAPIのURL（例 `https://fishing.example.com`、末尾の `/` なし）。空ならサーバーを使わない（ランキングは「準備中」、図鑑はこの訪問の記録だけ） |
+| `apiBaseUrl` | 釣りAPIのURL（例 `https://fishing.example.com`、末尾の `/` なし）。空ならサーバーを使わない（ランキングは空、図鑑は今回の記録だけ） |
 | `rankingLimit` | ランキングの表示人数 |
 | `rankingRefreshSeconds` | ランキングを読み直す間隔（秒） |
 | `editorTestUserId` | Unity エディタで試すとき専用のユーザーID（エディタはオフラインで Basis のIDが無いため）。ビルドしたワールドでは使われません |

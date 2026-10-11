@@ -27,6 +27,10 @@ public class FishingBackend : MonoBehaviour
     private const int KindZukan = 3;
 
     public FishingWorldController Controller;
+    // The warning at the rod stand: shown in the scene by default and hidden here once the
+    // permission-gated APIs are known to work, so it stays up when they were refused (or when the
+    // world's scripts do not run at all).
+    public GameObject ScriptWarning;
     // e.g. https://fishing.example.com (no trailing slash). Empty: no server, nothing is sent.
     public string ApiBaseUrl = "";
     public int RankingLimit = 10;
@@ -44,38 +48,51 @@ public class FishingBackend : MonoBehaviour
     private float nextAttemptAt;
     private bool zukanWanted = true;
     private bool zukanLoaded;
+    private bool rankingLoaded;
+    // After the encyclopedia failed: when to try it again (0 = not waiting). It does not hold the
+    // request queue meanwhile, so the ranking still gets its turn.
+    private float zukanRetryAt;
 
     private void Start()
     {
-        if (ApiBaseUrl.Length == 0)
-        {
-            Controller.SetRankingText("<b>レベルランキング</b>\n<color=#7A8A80>準備中</color>");
-            return;
-        }
         // Touch the permission-gated web API first: if the player refused it, this throws and the
-        // script stops here, leaving the boards on their offline text.
+        // script stops here, leaving the warning up and the boards empty. (Permission is asked for
+        // the world's scripts as a whole, so one gated API stands for all of them.)
         UnityWebRequest probe = new UnityWebRequest();
         probe.Dispose();
+        if (ScriptWarning != null) ScriptWarning.SetActive(false);
     }
 
     private void Update()
     {
         if (ApiBaseUrl.Length == 0) return;
-        Controller.BackendHeartbeat();
+        // The board's reload buttons: 1 = ranking, 2 = encyclopedia. Also retries a failed server now.
+        int reload = Controller.TakeReloadRequests();
+        if ((reload & 1) != 0) nextRankingAt = 0f;
+        if ((reload & 2) != 0) zukanWanted = true;
+        if (zukanRetryAt > 0f && Time.time >= zukanRetryAt)
+        {
+            zukanRetryAt = 0f;
+            zukanWanted = true;
+        }
+        if (reload != 0) nextAttemptAt = 0f;
+
         if (request != null)
         {
             if (request.isDone) Finish();
             return;
         }
+
         // IsNullOrEmpty, not == null: Cilbox does not start unserialized string fields as null.
-        if (string.IsNullOrEmpty(userId) && !ResolvePlayer()) return;
+        bool hasId = !string.IsNullOrEmpty(userId) || ResolvePlayer();
         if (Time.time < nextAttemptAt) return;
 
-        if (Controller.PendingCatchCount() > 0)
+        // The ranking needs no id; catches and the encyclopedia wait for it.
+        if (hasId && Controller.PendingCatchCount() > 0)
         {
             SendCatch();
         }
-        else if (zukanWanted)
+        else if (hasId && zukanWanted)
         {
             Begin(KindZukan, UnityWebRequest.kHttpVerbGET, ApiBaseUrl + "/api/v1/users/" + UnityWebRequest.EscapeURL(userId) + "/encyclopedia?limit=500", null);
         }
@@ -97,6 +114,8 @@ public class FishingBackend : MonoBehaviour
         displayName = player.SafeDisplayName;
         if (string.IsNullOrEmpty(displayName)) displayName = player.DisplayName;
         if (string.IsNullOrEmpty(displayName)) displayName = "名無しの釣り人";
+        // A ranking fetched before the id was known could not mark the player's own row.
+        nextRankingAt = 0f;
         return true;
     }
 
@@ -143,12 +162,24 @@ public class FishingBackend : MonoBehaviour
         request = null;
         requestKind = KindNone;
 
-        if (!reached || status >= 500 || status == 0)
+        if (!reached || status == 0)
         {
-            // Unreachable or failing: keep everything and try again shortly.
+            // Not reached (offline, server down): keep everything and quietly try again shortly.
             nextAttemptAt = Time.time + RetrySeconds;
-            if (!zukanLoaded) Controller.SetZukanStatus("サーバーに接続できません（この訪問の記録のみ）");
             if (kind == KindRanking) nextRankingAt = Time.time + RetrySeconds;
+            return;
+        }
+        if (status >= 500)
+        {
+            // The server answered with an error: keep everything, try again, and say so.
+            nextAttemptAt = Time.time + RetrySeconds;
+            if (kind == KindRanking) nextRankingAt = Time.time + RetrySeconds;
+            if (kind == KindZukan)
+            {
+                zukanWanted = false;
+                zukanRetryAt = Time.time + RetrySeconds * 2f;
+            }
+            ShowError(kind, status);
             return;
         }
 
@@ -162,24 +193,55 @@ public class FishingBackend : MonoBehaviour
                 zukanWanted = true;
                 nextRankingAt = 0f;
             }
+            else
+            {
+                ShowError(kind, status);
+            }
         }
         else if (kind == KindZukan)
         {
+            // 404: no catches recorded yet, not an error.
             if (status == 200 || status == 404)
             {
-                // 404: no catches recorded yet.
                 Controller.BeginServerZukan();
                 if (status == 200) ReadZukan(text);
                 Controller.EndServerZukan();
-                Controller.SetZukanStatus("保存された記録");
+                Controller.SetZukanStatus("");
                 zukanLoaded = true;
+            }
+            else
+            {
+                ShowError(kind, status);
             }
             zukanWanted = false;
         }
         else if (kind == KindRanking)
         {
-            if (status == 200) Controller.SetRankingText(FormatRanking(text));
+            if (status == 200)
+            {
+                Controller.SetRankingText(FormatRanking(text));
+                rankingLoaded = true;
+            }
+            else
+            {
+                ShowError(kind, status);
+            }
             nextRankingAt = Time.time + RankingRefreshSeconds;
+        }
+    }
+
+    // Only errors the server reports are shown (no messages while things work, or while it is
+    // simply unreachable): on the ranking in place of the list, on the encyclopedia's status line.
+    private void ShowError(int kind, long status)
+    {
+        string message = "<color=#B5651D>サーバーエラー（" + status + "）</color>";
+        if (kind == KindRanking)
+        {
+            Controller.SetRankingText(FishingWorldController.RankingHeader + message);
+        }
+        else
+        {
+            Controller.SetZukanStatus(message);
         }
     }
 

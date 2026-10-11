@@ -63,15 +63,9 @@ public class FishingWorldController : MonoBehaviour
     public TextMeshPro RankingText;
     public TextMeshPro StandText;
 
-    [Header("Script permission notices")]
-    // Shown in the scene by default; this script hides it on start. If the world's scripts do not
-    // run at all (permission prompt unanswered or refused), it stays up and says so.
-    public GameObject ScriptWarning;
-    // Shown when the scripts run but the record server's permission was refused.
-    public TextMeshPro PermissionNote;
-    // 1 when Data/backend.json has a server, so FishingBackend is expected to be running.
-    public int BackendExpected;
-    public float BackendGraceSeconds = 8f;
+    [Header("Reload buttons on the boards")]
+    public BasisInteractableButton RankingReloadButton;
+    public BasisInteractableButton ZukanReloadButton;
 
     [Header("Encyclopedia board (one row per species)")]
     public TextMeshPro ZukanStatus;
@@ -88,9 +82,8 @@ public class FishingWorldController : MonoBehaviour
     private int activeMask;
     private string[] recent;
     private float standMessageUntil;
-    private float startedAt;
-    private float backendSeenAt = -1f;
-    private bool backendMissing;
+    // Reloads asked for on the boards, for FishingBackend to pick up: 1 = ranking, 2 = encyclopedia.
+    private int reloadRequests;
 
     // The local player's encyclopedia: from the server once loaded, plus this visit's catches.
     private int[] myCount;
@@ -105,9 +98,6 @@ public class FishingWorldController : MonoBehaviour
 
     private void Start()
     {
-        if (ScriptWarning != null) ScriptWarning.SetActive(false);
-        if (PermissionNote != null) PermissionNote.text = "";
-        startedAt = Time.time;
         recent = new string[RecentCount];
         for (int i = 0; i < RecentCount; i++) recent[i] = "";
         int n = SpeciesNames.Length;
@@ -118,6 +108,8 @@ public class FishingWorldController : MonoBehaviour
         pendingCm = new float[PendingCapacity];
 
         SpawnButton.ButtonDown = OnButtonDown;
+        if (RankingReloadButton != null) RankingReloadButton.ButtonDown = OnRankingReload;
+        if (ZukanReloadButton != null) ZukanReloadButton.ButtonDown = OnZukanReload;
 
         net = SafeUtil.MakeNetworkable(this);
         if (net != null)
@@ -127,8 +119,9 @@ public class FishingWorldController : MonoBehaviour
         }
         RefreshRecent();
         RefreshZukan();
-        SetRankingText("<b>レベルランキング</b>\n<color=#7A8A80>読み込み中…</color>");
-        SetZukanStatus("この訪問の記録");
+        // Status lines stay empty unless the server reports an error.
+        SetRankingText(RankingHeader);
+        SetZukanStatus("");
         SetStandText("ボタンを押すと釣り竿が出るよ");
     }
 
@@ -139,25 +132,30 @@ public class FishingWorldController : MonoBehaviour
             standMessageUntil = 0f;
             SetStandText("ボタンを押すと釣り竿が出るよ");
         }
-        CheckBackend();
     }
 
-    /// <summary>FishingBackend calls this every frame it runs.</summary>
-    public void BackendHeartbeat()
+    public const string RankingHeader = "<b>レベルランキング</b>\n";
+
+    /// <summary>The ranking board's reload button.</summary>
+    public void OnRankingReload()
     {
-        backendSeenAt = Time.time;
+        if (ButtonAudio != null && ButtonClip != null) ButtonAudio.PlayOneShot(ButtonClip, 0.5f);
+        reloadRequests |= 1;
     }
 
-    // FishingBackend is switched off when its permissions were refused; it can't say so itself, so
-    // notice it going quiet.
-    private void CheckBackend()
+    /// <summary>The encyclopedia board's reload button.</summary>
+    public void OnZukanReload()
     {
-        if (BackendExpected == 0 || PermissionNote == null) return;
-        bool missing = Time.time - startedAt > BackendGraceSeconds && Time.time - backendSeenAt > 3f;
-        if (missing == backendMissing) return;
-        backendMissing = missing;
-        PermissionNote.text = missing ? "記録サーバーの許可がないため、釣果は保存されません" : "";
-        if (missing) SetZukanStatus("記録サーバーの許可がありません（この訪問の記録のみ）");
+        if (ButtonAudio != null && ButtonClip != null) ButtonAudio.PlayOneShot(ButtonClip, 0.5f);
+        reloadRequests |= 2;
+    }
+
+    /// <summary>FishingBackend takes the reloads asked for since it last looked.</summary>
+    public int TakeReloadRequests()
+    {
+        int requests = reloadRequests;
+        reloadRequests = 0;
+        return requests;
     }
 
     /// <summary>The button on the stand. Public so it can be pressed from the editor.</summary>
