@@ -48,6 +48,8 @@ public class FishingRod : MonoBehaviour
     public Vector3 PondCenter = Vector3.zero;
     public float PondRadius = 6f;
     public float GroundLevel = 0f;
+    // What the bobber and a landed fish rest on (the world, not players or pickups).
+    public int GroundMask = 1;
 
     [Header("Parts")]
     public Transform Tip;
@@ -104,7 +106,6 @@ public class FishingRod : MonoBehaviour
     private bool useDown;
     private bool casting;
     private float castTime;
-    private Rigidbody body;
     private float nextSendAt;
     private float nextThrashAt;
     private Vector3 fishSwing;
@@ -121,7 +122,6 @@ public class FishingRod : MonoBehaviour
         RollNextBite();
         ShowFish(-1, 0f);
 
-        body = this.GetComponent<Rigidbody>();
         pickup = this.GetComponent<BasisPickupInteractable>();
         if (pickup != null)
         {
@@ -280,17 +280,11 @@ public class FishingRod : MonoBehaviour
         inWater = InPond(bob) && bob.y <= WaterLevel + 0.03f;
     }
 
-    // Height of whatever is under the bobber (ground, dock, table), ignoring the rod itself.
+    // Height of whatever is under a point (ground, dock, table).
     private float GroundAt(Vector3 p)
     {
-        Vector3 origin = p + Vector3.up * 1.5f;
         RaycastHit hit;
-        for (int i = 0; i < 3; i++)
-        {
-            if (!Physics.Raycast(origin, Vector3.down, out hit, 5f, -1, QueryTriggerInteraction.Ignore)) break;
-            if (body == null || hit.rigidbody != body) return hit.point.y;
-            origin = hit.point + Vector3.down * 0.01f;
-        }
+        if (Physics.Raycast(p + Vector3.up * 1.5f, Vector3.down, out hit, 5f, GroundMask, QueryTriggerInteraction.Ignore)) return hit.point.y;
         return GroundLevel;
     }
 
@@ -475,7 +469,6 @@ public class FishingRod : MonoBehaviour
         Vector3 hook = bob + Vector3.down * HookDrop;
         if (species >= 0)
         {
-            // The fish hangs from the hook, mouth up, swinging and flapping.
             float t = Time.time;
             if (t >= nextThrashAt)
             {
@@ -487,10 +480,31 @@ public class FishingRod : MonoBehaviour
                     Splash.Play();
                 }
             }
+            // The fish hangs from the hook, mouth up. Lowered onto the ground it tips over until
+            // its tail rests there, and lies flat once the hook is down too.
+            float length = sizeCm * 0.01f;
+            float tilt = 0f;
+            if (!InPond(hook))
+            {
+                float floor = GroundAt(hook) + 0.03f;
+                if (hook.y < floor) hook.y = floor;
+                float room = hook.y - floor;
+                if (room < length) tilt = Mathf.Acos(Mathf.Clamp01(room / length));
+            }
+            Vector3 side = new Vector3(fishSwing.x, 0f, fishSwing.z);
+            if (side.sqrMagnitude < 0.01f) side = Vector3.forward;
+            side.Normalize();
+            float cos = Mathf.Cos(tilt);
+            float sin = Mathf.Sin(tilt);
+            Vector3 mouthward = Vector3.up * cos - side * sin;
+            Vector3 back = Vector3.up * sin + side * cos;
+            Quaternion pose = Quaternion.LookRotation(mouthward, back);
+
+            // Flaps its tail; swings on the line only while hanging.
             float flap = Mathf.Sin(t * 14f) * 25f;
-            Quaternion hang = Quaternion.LookRotation(Vector3.up, Vector3.forward);
-            Quaternion swing = Quaternion.Euler(fishSwing.x * 12f * Mathf.Sin(t * 3f), flap, fishSwing.z * 12f * Mathf.Cos(t * 2.5f));
-            FishRoot.SetPositionAndRotation(hook, hang * swing);
+            float sway = cos * 12f;
+            Quaternion swing = Quaternion.Euler(fishSwing.x * sway * Mathf.Sin(t * 3f), flap, fishSwing.z * sway * Mathf.Cos(t * 2.5f));
+            FishRoot.SetPositionAndRotation(hook, pose * swing);
         }
 
         // Line: a sagging curve from the tip to the bobber, then straight down to the hook.

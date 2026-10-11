@@ -29,6 +29,9 @@ public class FishingWorldController : MonoBehaviour
     public FishingRod[] Rods;
     public Transform RodSpawnPoint;
     public float RodSpacing = 0.2f;
+    // Places on the table a rod comes out at; a place with a rod still lying in it is skipped.
+    public int RodSlots = 6;
+    public int RodLayerMask = 1 << 8;
     public ParticleSystem SpawnPuff;
     public AudioSource ButtonAudio;
     public AudioClip ButtonClip;
@@ -99,24 +102,49 @@ public class FishingWorldController : MonoBehaviour
             standMessageUntil = Time.time + 3f;
             return;
         }
+        int slot = FreeSlot();
+        if (slot < 0)
+        {
+            SetStandText("台の上の竿を先に使ってね");
+            standMessageUntil = Time.time + 3f;
+            return;
+        }
 
-        ActivateRod(index, true);
+        ActivateRod(index, slot);
         if (net != null && net.HasNetworkID)
         {
-            net.SendCustomNetworkEvent(new byte[] { MsgActivate, (byte)index }, DeliveryMethod.ReliableOrdered, null);
+            net.SendCustomNetworkEvent(new byte[] { MsgActivate, (byte)index, (byte)slot }, DeliveryMethod.ReliableOrdered, null);
         }
     }
 
-    private void ActivateRod(int index, bool placeOnStand)
+    private Vector3 SlotPosition(int slot)
+    {
+        return RodSpawnPoint.position + RodSpawnPoint.right * (RodSpacing * slot);
+    }
+
+    // The first place on the table with no rod lying in it, or -1.
+    private int FreeSlot()
+    {
+        Vector3 halfExtents = new Vector3(0.04f, 0.06f, 1.05f);
+        for (int slot = 0; slot < RodSlots; slot++)
+        {
+            Vector3 center = SlotPosition(slot) + RodSpawnPoint.forward * 1.05f;
+            if (!Physics.CheckBox(center, halfExtents, RodSpawnPoint.rotation, RodLayerMask, QueryTriggerInteraction.Ignore)) return slot;
+        }
+        return -1;
+    }
+
+    // slot < 0: leave the rod where it is (its pickup sync places it).
+    private void ActivateRod(int index, int slot)
     {
         if (index < 0 || index >= Rods.Length) return;
         if ((activeMask & (1 << index)) != 0) return;
         activeMask |= 1 << index;
 
         FishingRod rod = Rods[index];
-        if (placeOnStand)
+        if (slot >= 0)
         {
-            Vector3 position = RodSpawnPoint.position + RodSpawnPoint.right * (RodSpacing * index);
+            Vector3 position = SlotPosition(slot);
             rod.transform.SetPositionAndRotation(position, RodSpawnPoint.rotation);
             if (SpawnPuff != null)
             {
@@ -227,17 +255,20 @@ public class FishingWorldController : MonoBehaviour
     {
         if (player == null || net == null || !net.IsOwnedLocallyOnServer) return;
 
-        // [MsgSnapshot, mask, count per species (2 bytes each), then the recent lines as UTF-8]
+        // [MsgSnapshot, mask (4 bytes), count per species (2 bytes each), then the recent lines as UTF-8]
         string joined = string.Join("\n", recent);
         byte[] text = Encoding.UTF8.GetBytes(joined);
-        int header = 2 + counts.Length * 2;
+        int header = 5 + counts.Length * 2;
         byte[] buffer = new byte[header + text.Length];
         buffer[0] = MsgSnapshot;
-        buffer[1] = (byte)activeMask;
+        buffer[1] = (byte)(activeMask & 0xFF);
+        buffer[2] = (byte)((activeMask >> 8) & 0xFF);
+        buffer[3] = (byte)((activeMask >> 16) & 0xFF);
+        buffer[4] = (byte)((activeMask >> 24) & 0xFF);
         for (int i = 0; i < counts.Length; i++)
         {
-            buffer[2 + i * 2] = (byte)(counts[i] & 0xFF);
-            buffer[3 + i * 2] = (byte)((counts[i] >> 8) & 0xFF);
+            buffer[5 + i * 2] = (byte)(counts[i] & 0xFF);
+            buffer[6 + i * 2] = (byte)((counts[i] >> 8) & 0xFF);
         }
         for (int i = 0; i < text.Length; i++) buffer[header + i] = text[i];
         net.SendCustomNetworkEvent(buffer, DeliveryMethod.ReliableOrdered, new ushort[] { player.playerId });
@@ -247,23 +278,23 @@ public class FishingWorldController : MonoBehaviour
     {
         if (buffer == null || buffer.Length < 2) return;
 
-        if (buffer[0] == MsgActivate)
+        if (buffer[0] == MsgActivate && buffer.Length >= 3)
         {
-            ActivateRod(buffer[1], true);
+            ActivateRod(buffer[1], buffer[2]);
         }
         else if (buffer[0] == MsgSnapshot)
         {
-            int mask = buffer[1];
+            int header = 5 + counts.Length * 2;
+            if (buffer.Length < header) return;
+            int mask = buffer[1] | (buffer[2] << 8) | (buffer[3] << 16) | (buffer[4] << 24);
             for (int i = 0; i < Rods.Length; i++)
             {
                 // Rods already out keep the pose their pickup sync gives them.
-                if ((mask & (1 << i)) != 0) ActivateRod(i, false);
+                if ((mask & (1 << i)) != 0) ActivateRod(i, -1);
             }
-            int header = 2 + counts.Length * 2;
-            if (buffer.Length < header) return;
             for (int i = 0; i < counts.Length; i++)
             {
-                counts[i] = buffer[2 + i * 2] | (buffer[3 + i * 2] << 8);
+                counts[i] = buffer[5 + i * 2] | (buffer[6 + i * 2] << 8);
             }
             string joined = Encoding.UTF8.GetString(buffer, header, buffer.Length - header);
             string[] lines = joined.Split('\n');

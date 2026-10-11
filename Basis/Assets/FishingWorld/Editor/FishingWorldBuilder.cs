@@ -35,7 +35,10 @@ public static partial class FishingWorldBuilder
     const float WaterLevel = -0.2f;
     const float FishingRadius = 6.6f;
 
-    const int RodCount = 6;
+    const int RodCount = 30;
+    const int RodSlots = 6;
+    // Basis' layer for pickups: collides with the world and other pickups, not with players.
+    const int InteractableLayer = 8;
 
     static readonly Vector3 SpawnPosition = new Vector3(0f, 0f, -19f);
     static readonly Vector3 StandPosition = new Vector3(2.4f, 0f, -15f);
@@ -82,6 +85,7 @@ public static partial class FishingWorldBuilder
         AudioClip click = SaveSound("click", Synth.Click());
 
         TMP_FontAsset font = JapaneseFont();
+        string contentGroupId = ExistingContentGroupId();
 
         Scene scene = EditorSceneManager.NewScene(NewSceneSetup.EmptyScene, NewSceneMode.Single);
         SetupLighting();
@@ -93,6 +97,8 @@ public static partial class FishingWorldBuilder
         {
             AssetBundleName = "Forest Pond Fishing",
             AssetBundleDescription = "A soft low-poly forest pond. Grab a rod from the stand and fish.",
+            // Kept across rebuilds so new bundles stay the same world.
+            ContentGroupId = contentGroupId,
         };
         basisScene.RespawnHeight = -20f;
         world.AddComponent<CilboxSceneBasis>();
@@ -127,6 +133,15 @@ public static partial class FishingWorldBuilder
         EditorSceneManager.SaveScene(scene, ScenePath);
         AssetDatabase.SaveAssets();
         Debug.Log($"[FishingWorld] Built {ScenePath}");
+    }
+
+    /// <summary>The id the SDK gave the world on its first bundle build, read from the scene being replaced.</summary>
+    static string ExistingContentGroupId()
+    {
+        if (!File.Exists(ScenePath)) return null;
+        Scene previous = EditorSceneManager.OpenScene(ScenePath, OpenSceneMode.Single);
+        BasisScene.SceneTraversalFindBasisScene(previous, out BasisScene existing);
+        return existing != null ? existing.BasisBundleDescription.ContentGroupId : null;
     }
 
     // ---------------------------------------------------------------- terrain
@@ -478,9 +493,9 @@ public static partial class FishingWorldBuilder
         interactable.InteractRange = 2.5f;
 
         TextMeshPro title = Text(stand, "Stand Title", font, "釣り竿", 2.6f, new Vector2(1.6f, 0.3f), Hex("6B4A2E"));
-        title.transform.localPosition = new Vector3(0f, 1.78f, 0.485f);
+        Place(title, new Vector3(0f, 1.78f, 0.485f));
         TextMeshPro hint = Text(stand, "Stand Hint", font, "", 1.3f, new Vector2(2.2f, 0.2f), Hex("6B4A2E"));
-        hint.transform.localPosition = new Vector3(0f, 1.27f, 0.485f);
+        Place(hint, new Vector3(0f, 1.27f, 0.485f));
 
         // Rods appear on the table, side by side, tips to the right.
         Transform spawnPoint = new GameObject("Rod Spawn Point").transform;
@@ -494,6 +509,8 @@ public static partial class FishingWorldBuilder
         controller.SpawnButton = interactable;
         controller.RodSpawnPoint = spawnPoint;
         controller.RodSpacing = 0.11f;
+        controller.RodSlots = RodSlots;
+        controller.RodLayerMask = 1 << InteractableLayer;
         controller.StandText = hint;
         controller.SpeciesNames = SpeciesNames;
         controller.SpeciesWeights = SpeciesWeights;
@@ -523,10 +540,10 @@ public static partial class FishingWorldBuilder
         // One catch per line: long player names are cut off rather than wrapped off the panel.
         recent.textWrappingMode = TextWrappingModes.NoWrap;
         recent.overflowMode = TextOverflowModes.Ellipsis;
-        recent.transform.localPosition = new Vector3(-0.4f, 1.45f, -0.035f);
+        Place(recent, new Vector3(-0.4f, 1.45f, -0.035f));
         TextMeshPro counts = Text(board, "Counts", font, "", 0.9f, new Vector2(0.72f, 1.15f), Hex("4A5A50"));
         counts.alignment = TextAlignmentOptions.TopLeft;
-        counts.transform.localPosition = new Vector3(0.68f, 1.45f, -0.035f);
+        Place(counts, new Vector3(0.68f, 1.45f, -0.035f));
         controller.RecentText = recent;
         controller.CountsText = counts;
     }
@@ -586,6 +603,8 @@ public static partial class FishingWorldBuilder
         pickup.RigidRef = body;
         pickup.GripPoint = grip;
         pickup.InteractRange = 2f;
+        // Stays in the hand after the grab is let go, on desktop and in VR; grab again to drop.
+        pickup.AutoHold = BasisInteractableObject.BasisAutoHold.Everywhere;
 
         BasisPickupSyncNetworking sync = go.AddComponent<BasisPickupSyncNetworking>();
         sync.BasisPickupInteractable = pickup;
@@ -636,6 +655,8 @@ public static partial class FishingWorldBuilder
         ParticleSystem.MainModule sparkleMain = rod.Sparkle.main;
         sparkleMain.loop = true;
         rod.Audio = Audio(go.transform, 1f);
+        rod.GroundMask = 1;
+        SetLayer(go.transform, InteractableLayer);
         rod.PlopClip = plop;
         rod.SplashClip = splash;
         rod.CatchClip = fanfare;
@@ -704,6 +725,12 @@ public static partial class FishingWorldBuilder
 
     // ---------------------------------------------------------------- helpers
 
+    static void SetLayer(Transform t, int layer)
+    {
+        t.gameObject.layer = layer;
+        foreach (Transform child in t) SetLayer(child, layer);
+    }
+
     static Transform Group(Transform parent, string name)
     {
         Transform t = new GameObject(name).transform;
@@ -756,6 +783,17 @@ public static partial class FishingWorldBuilder
         tmp.textWrappingMode = TextWrappingModes.Normal;
         tmp.rectTransform.sizeDelta = rect;
         return tmp;
+    }
+
+    // A TextMeshPro has a RectTransform, and the scene saves its anchoredPosition: setting only
+    // localPosition looks right until the scene is reloaded, then x and y fall back to zero.
+    static void Place(TextMeshPro text, Vector3 localPosition)
+    {
+        RectTransform rect = text.rectTransform;
+        rect.anchorMin = new Vector2(0.5f, 0.5f);
+        rect.anchorMax = new Vector2(0.5f, 0.5f);
+        rect.anchoredPosition3D = localPosition;
+        rect.localPosition = localPosition;
     }
 
     static ParticleSystem Particles(Transform parent, string name, Color a, Color b, int burst, float lifetime, float speed, float minSize, float maxSize, float gravity, float radius)
@@ -854,22 +892,37 @@ public static partial class FishingWorldBuilder
     static Material Mat(string name, Color color)
     {
         if (materials.TryGetValue(name, out Material cached)) return cached;
-        Material m = new Material(Shader.Find("Universal Render Pipeline/Lit"));
-        m.SetColor("_BaseColor", color);
+        Material m = FlatMaterial(name, "Universal Render Pipeline/Lit", color);
         m.SetFloat("_Smoothness", 0.05f);
         m.SetFloat("_Metallic", 0f);
         m.enableInstancing = true;
-        m = SaveMaterial(name, m);
-        materials[name] = m;
         return m;
     }
 
     static Material Unlit(string name, Color color)
     {
         if (materials.TryGetValue(name, out Material cached)) return cached;
-        Material m = new Material(Shader.Find("Universal Render Pipeline/Unlit"));
-        m.SetColor("_BaseColor", color);
-        m = SaveMaterial(name, m);
+        return FlatMaterial(name, "Universal Render Pipeline/Unlit", color);
+    }
+
+    // Sets the colour on the existing asset rather than replacing its properties, so a rebuild
+    // leaves alone the fields URP fills in on import and the asset does not churn in git.
+    static Material FlatMaterial(string name, string shaderName, Color color)
+    {
+        string path = $"{Generated}/Materials/{name}.mat";
+        Material m = AssetDatabase.LoadAssetAtPath<Material>(path);
+        Shader shader = Shader.Find(shaderName);
+        if (m == null)
+        {
+            m = new Material(shader) { name = name };
+            AssetDatabase.CreateAsset(m, path);
+        }
+        else if (m.shader != shader)
+        {
+            m.shader = shader;
+        }
+        if (m.GetColor("_BaseColor") != color) m.SetColor("_BaseColor", color);
+        EditorUtility.SetDirty(m);
         materials[name] = m;
         return m;
     }
@@ -909,7 +962,11 @@ public static partial class FishingWorldBuilder
     {
         string path = $"{Generated}/NotoSansJP SDF.asset";
         TMP_FontAsset existing = AssetDatabase.LoadAssetAtPath<TMP_FontAsset>(path);
-        if (existing != null) return existing;
+        if (existing != null)
+        {
+            UseWorldTextShader(existing);
+            return existing;
+        }
 
         Font source = AssetDatabase.LoadAssetAtPath<Font>(JapaneseFontPath);
         TMP_FontAsset font = TMP_FontAsset.CreateFontAsset(source, 64, 6, GlyphRenderMode.SDFAA, 1024, 1024, AtlasPopulationMode.Dynamic, true);
@@ -921,9 +978,23 @@ public static partial class FishingWorldBuilder
         AssetDatabase.AddObjectToAsset(font.material, font);
         // Bake the fixed text in, so it shows even before the dynamic atlas fills.
         font.TryAddCharacters("釣り竿ボタンを押すと釣り竿が出るよもう全部出ているさいきんの釣果まだ誰も釣っていないよ図鑑？×があなただれかフナコイニジマスナマズ金のコイ長靴cm!★…0123456789()");
+        UseWorldTextShader(font);
         EditorUtility.SetDirty(font);
         AssetDatabase.SaveAssets();
         return font;
+    }
+
+    /// <summary>
+    /// TMP's shaders take their depth test from a UI-only global that URP leaves off, so 3D text
+    /// would draw through everything. The world's copy of the shader depth-tests normally.
+    /// </summary>
+    static void UseWorldTextShader(TMP_FontAsset font)
+    {
+        Shader shader = Shader.Find("FishingWorld/TMP Distance Field (World)");
+        if (shader == null || font.material.shader == shader) return;
+        font.material.shader = shader;
+        EditorUtility.SetDirty(font.material);
+        AssetDatabase.SaveAssets();
     }
 
     static AudioClip SaveSound(string name, float[] samples)
