@@ -864,7 +864,7 @@ PlayerSettings:
   gcWBarrierValidation: 0
   managedCodeVariant: {}
   apiCompatibilityLevelPerPlatform: {}
-  editorAssembliesCompatibilityLevel: 3
+  editorAssembliesCompatibilityLevel: 2
   m_RenderingPath: 1
   m_MobileRenderingPath: 1
   windowsCopyVCRuntime: 1
