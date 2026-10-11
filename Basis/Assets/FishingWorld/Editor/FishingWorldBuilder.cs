@@ -656,6 +656,7 @@ public static partial class FishingWorldBuilder
         sparkleMain.loop = true;
         rod.Audio = Audio(go.transform, 1f);
         rod.GroundMask = 1;
+        go.AddComponent<FishingHaptics>().Rod = rod;
         SetLayer(go.transform, InteractableLayer);
         rod.PlopClip = plop;
         rod.SplashClip = splash;

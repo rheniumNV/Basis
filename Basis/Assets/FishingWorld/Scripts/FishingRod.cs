@@ -1,8 +1,10 @@
 using Basis;
 using Basis.Network.Core;
 using Basis.Scripts.BasisSdk.Interactions;
+using Basis.Scripts.BasisSdk.Players;
 using Basis.Scripts.Device_Management.Devices;
 using Basis.Scripts.Networking.NetworkedAvatar;
+using Basis.Shims;
 using Cilbox;
 using System;
 using UnityEngine;
@@ -19,6 +21,13 @@ using UnityEngine;
 /// Whoever holds the rod last owns it: the owner simulates the bobber and rolls the bites, and
 /// streams the bobber position, state and hooked fish to everyone else, who only display it.
 /// The rod's own transform is synced by its BasisPickupSyncNetworking.
+///
+/// A rod in someone's hand cannot be grabbed by anyone else: the holder announces it, and the
+/// other clients switch the pickup off until it is let go (or the holder leaves). A rod nobody
+/// holds can be picked up by anyone.
+///
+/// The hand holding the rod vibrates with the fishing: a faint tick now and then while it waits,
+/// twitches on a nibble, a strong buzz on the strike and the catch, and the fish flapping.
 /// </summary>
 [Cilboxable]
 public class FishingRod : MonoBehaviour
@@ -33,6 +42,7 @@ public class FishingRod : MonoBehaviour
     // Messages
     private const byte MsgState = 1;
     private const byte MsgEvent = 2;
+    private const byte MsgHeld = 3;
     private const byte EvNibble = 1;
     private const byte EvStrike = 2;
     private const byte EvCaught = 3;
@@ -88,6 +98,14 @@ public class FishingRod : MonoBehaviour
 
     private BasisNetworkShim net;
     private BasisPickupInteractable pickup;
+    private bool heldHere;
+    private bool heldElsewhere;
+    private ushort holderId;
+    private float nextTickAt;
+    // 0 left, 1 right, -1 not held here.
+    private int hapticHand = -1;
+    private float hapticSeconds;
+    private float hapticStrength;
 
     private int state;
     private int species = -1;
@@ -126,6 +144,7 @@ public class FishingRod : MonoBehaviour
         if (pickup != null)
         {
             pickup.OnInteractStartEvent.AddListener(OnPickup);
+            pickup.OnInteractEndEvent.AddListener(OnDrop);
             pickup.OnPickupUse.AddListener(OnPickupUse);
         }
 
@@ -134,6 +153,7 @@ public class FishingRod : MonoBehaviour
         {
             net.NetworkMessageReceived += OnNetworkMessage;
             net.PlayerJoined += OnPlayerJoined;
+            net.PlayerLeft += OnPlayerLeft;
         }
     }
 
@@ -143,6 +163,18 @@ public class FishingRod : MonoBehaviour
         {
             net.TakeOwnership();
         }
+        heldHere = true;
+        SendHeld(null);
+        hapticHand = NearestHand();
+        Pulse(0.05f, 0.25f);
+    }
+
+    private void OnDrop(BasisInput input)
+    {
+        heldHere = false;
+        SendHeld(null);
+        hapticHand = -1;
+        ClearHaptic();
     }
 
     private void OnPickupUse(BasisPickUpUseMode mode)
@@ -209,6 +241,79 @@ public class FishingRod : MonoBehaviour
 
         useDown = false;
         UpdateVisuals(tip, dt);
+        HapticTick();
+    }
+
+    // Vibration for the hand holding the rod here; FishingHaptics plays it. The strongest pulse
+    // asked for before it is played wins.
+    private void Pulse(float seconds, float strength)
+    {
+        if (hapticHand < 0) return;
+        if (strength > hapticStrength)
+        {
+            hapticStrength = strength;
+            hapticSeconds = seconds;
+        }
+    }
+
+    public int HapticHand()
+    {
+        return hapticHand;
+    }
+
+    // Which of the local player's hands is at the grip. (BasisInput would say, but asking it is
+    // a refused call that would fail every script in the world.)
+    private int NearestHand()
+    {
+        IBasisPlayer local = BasisPlayersShim.Local;
+        if (local == null) return 1;
+        Vector3 grip = transform.position + transform.forward * 0.2f;
+        float left = (local.GetBonePosition(HumanBodyBones.LeftHand) - grip).sqrMagnitude;
+        float right = (local.GetBonePosition(HumanBodyBones.RightHand) - grip).sqrMagnitude;
+        return left < right ? 0 : 1;
+    }
+
+    public float HapticSeconds()
+    {
+        return hapticSeconds;
+    }
+
+    public float HapticStrength()
+    {
+        return hapticStrength;
+    }
+
+    public void ClearHaptic()
+    {
+        hapticStrength = 0f;
+        hapticSeconds = 0f;
+    }
+
+    // The steady part of the vibration, from the state every client knows.
+    private void HapticTick()
+    {
+        if (hapticHand < 0) return;
+        float t = Time.time;
+        if (t < nextTickAt) return;
+        if (state == StateWaiting)
+        {
+            Pulse(0.03f, 0.12f);
+            nextTickAt = t + UnityEngine.Random.Range(2f, 3f);
+        }
+        else if (state == StateNibble)
+        {
+            Pulse(0.04f, 0.35f);
+            nextTickAt = t + UnityEngine.Random.Range(0.15f, 0.3f);
+        }
+        else if (state == StateStrike)
+        {
+            Pulse(0.2f, 0.85f);
+            nextTickAt = t + 0.25f;
+        }
+        else
+        {
+            nextTickAt = t + 0.2f;
+        }
     }
 
     private bool InPond(Vector3 p)
@@ -280,11 +385,13 @@ public class FishingRod : MonoBehaviour
         inWater = InPond(bob) && bob.y <= WaterLevel + 0.03f;
     }
 
-    // Height of whatever is under a point (ground, dock, table).
+    // Height of whatever is under a point (ground, dock, table). The ray starts only a little
+    // above the point, more than the bobber moves in a frame but not so high that it lands on a
+    // roof or a tree overhead.
     private float GroundAt(Vector3 p)
     {
         RaycastHit hit;
-        if (Physics.Raycast(p + Vector3.up * 1.5f, Vector3.down, out hit, 5f, GroundMask, QueryTriggerInteraction.Ignore)) return hit.point.y;
+        if (Physics.Raycast(p + Vector3.up * 0.5f, Vector3.down, out hit, 5f, GroundMask, QueryTriggerInteraction.Ignore)) return hit.point.y;
         return GroundLevel;
     }
 
@@ -363,6 +470,8 @@ public class FishingRod : MonoBehaviour
         {
             SetState(StateWaiting);
             PlayClip(PlopClip, 0.6f);
+            Pulse(0.06f, 0.3f);
+            nextTickAt = Time.time + 2f;
             return;
         }
 
@@ -473,6 +582,7 @@ public class FishingRod : MonoBehaviour
             if (t >= nextThrashAt)
             {
                 nextThrashAt = t + UnityEngine.Random.Range(0.4f, 1.4f);
+                Pulse(0.08f, 0.45f);
                 fishSwing = new Vector3(UnityEngine.Random.Range(-1f, 1f), 0f, UnityEngine.Random.Range(-1f, 1f));
                 if (inWater && Splash != null)
                 {
@@ -543,16 +653,21 @@ public class FishingRod : MonoBehaviour
         {
             PlayClip(PlopClip, 1f);
             PlaySplash();
+            Pulse(0.3f, 0.9f);
+            nextTickAt = Time.time + 0.3f;
         }
         else if (ev == EvCaught)
         {
             PlaySplash();
             PlayClip(SplashClip, 1f);
             PlayClip(CatchClip, 0.8f);
+            Pulse(0.5f, 1f);
+            nextThrashAt = Time.time + 0.6f;
         }
         else if (ev == EvEscaped)
         {
             PlayClip(EscapeClip, 0.7f);
+            Pulse(0.1f, 0.2f);
         }
         else if (ev == EvReleased)
         {
@@ -565,8 +680,30 @@ public class FishingRod : MonoBehaviour
 
     private void OnPlayerJoined(BasisNetworkPlayer player)
     {
-        if (player == null || net == null || !net.IsOwnedLocallyOnServer) return;
+        if (player == null || net == null) return;
+        if (heldHere) SendHeld(new ushort[] { player.playerId });
+        if (!net.IsOwnedLocallyOnServer) return;
         SendState(DeliveryMethod.ReliableOrdered, new ushort[] { player.playerId });
+    }
+
+    private void OnPlayerLeft(BasisNetworkPlayer player)
+    {
+        if (player != null && heldElsewhere && player.playerId == holderId) SetHeldElsewhere(false, 0);
+    }
+
+    // Tells the others whether the rod is in a hand here, so they can stop it being taken.
+    private void SendHeld(ushort[] recipients)
+    {
+        if (net == null || !net.HasNetworkID) return;
+        byte[] buffer = new byte[] { MsgHeld, (byte)(heldHere ? 1 : 0) };
+        net.SendCustomNetworkEvent(buffer, DeliveryMethod.ReliableOrdered, recipients);
+    }
+
+    private void SetHeldElsewhere(bool held, ushort holder)
+    {
+        heldElsewhere = held;
+        holderId = holder;
+        if (pickup != null) pickup.InteractableEnabled = !held;
     }
 
     private void SendState(DeliveryMethod method, ushort[] recipients)
@@ -598,6 +735,16 @@ public class FishingRod : MonoBehaviour
     private void OnNetworkMessage(ushort sender, byte[] buffer, DeliveryMethod method)
     {
         if (buffer == null || buffer.Length < 1) return;
+
+        // Held state comes from whoever holds the rod, owner or not.
+        if (buffer[0] == MsgHeld && buffer.Length >= 2)
+        {
+            bool held = buffer[1] != 0;
+            if (held) SetHeldElsewhere(true, sender);
+            else if (sender == holderId) SetHeldElsewhere(false, 0);
+            return;
+        }
+
         if (IsAuthority()) return;
 
         if (buffer[0] == MsgState && buffer.Length >= StatePacketSize)
