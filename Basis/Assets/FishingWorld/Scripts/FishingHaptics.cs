@@ -29,7 +29,14 @@ public class FishingHaptics : MonoBehaviour
         Rod.ClearHaptic();
         if (hand < 0) return;
 
-        InputDevice device = InputDevices.GetDeviceAtXRNode(hand == 0 ? XRNode.LeftHand : XRNode.RightHand);
+        // 0 left, 1 right, 2 both.
+        if (hand != 1) Buzz(XRNode.LeftHand, strength, seconds);
+        if (hand != 0) Buzz(XRNode.RightHand, strength, seconds);
+    }
+
+    private static void Buzz(XRNode node, float strength, float seconds)
+    {
+        InputDevice device = InputDevices.GetDeviceAtXRNode(node);
         if (device.isValid) device.SendHapticImpulse(0u, strength, seconds);
     }
 }

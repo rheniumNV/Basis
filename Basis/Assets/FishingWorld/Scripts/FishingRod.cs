@@ -102,8 +102,9 @@ public class FishingRod : MonoBehaviour
     private bool heldElsewhere;
     private ushort holderId;
     private float nextTickAt;
-    // 0 left, 1 right, -1 not held here.
-    private int hapticHand = -1;
+    // Until when the hand keeps shaking after a catch, as the fish fights on the line.
+    private float rumbleUntil;
+    private bool rumbleBeat;
     private float hapticSeconds;
     private float hapticStrength;
 
@@ -165,7 +166,6 @@ public class FishingRod : MonoBehaviour
         }
         heldHere = true;
         SendHeld(null);
-        hapticHand = NearestHand();
         Pulse(0.05f, 0.25f);
     }
 
@@ -173,7 +173,6 @@ public class FishingRod : MonoBehaviour
     {
         heldHere = false;
         SendHeld(null);
-        hapticHand = -1;
         ClearHaptic();
     }
 
@@ -244,32 +243,42 @@ public class FishingRod : MonoBehaviour
         HapticTick();
     }
 
-    // Vibration for the hand holding the rod here; FishingHaptics plays it. The strongest pulse
-    // asked for before it is played wins.
+    // Vibration for the hand holding the rod here; FishingHaptics plays it. Of the pulses asked
+    // for before it is played, the strongest wins, and the longest of equally strong ones.
     private void Pulse(float seconds, float strength)
     {
-        if (hapticHand < 0) return;
-        if (strength > hapticStrength)
+        if (!heldHere) return;
+        if (strength > hapticStrength || (strength == hapticStrength && seconds > hapticSeconds))
         {
             hapticStrength = strength;
             hapticSeconds = seconds;
         }
     }
 
+    // 0 left, 1 right, 2 both (can't tell), -1 when not held here. Worked out at each pulse, not at the grab: a rod
+    // grabbed from a distance is still lying away from the hand at that moment, and one passed
+    // to the other hand is still in the first, so only once it is held does the grip say which.
     public int HapticHand()
     {
-        return hapticHand;
+        if (!heldHere) return -1;
+        return NearestHand();
     }
 
     // Which of the local player's hands is at the grip. (BasisInput would say, but asking it is
-    // a refused call that would fail every script in the world.)
+    // a refused call that would fail every script in the world.) Both hands when it can't tell:
+    // no local player yet, or an avatar whose hand bones are unknown (they read as zero).
     private int NearestHand()
     {
         IBasisPlayer local = BasisPlayersShim.Local;
-        if (local == null) return 1;
+        if (local == null) return 2;
+        Vector3 leftHand = local.GetBonePosition(HumanBodyBones.LeftHand);
+        Vector3 rightHand = local.GetBonePosition(HumanBodyBones.RightHand);
+        if (leftHand == Vector3.zero || rightHand == Vector3.zero) return 2;
         Vector3 grip = transform.position + transform.forward * 0.2f;
-        float left = (local.GetBonePosition(HumanBodyBones.LeftHand) - grip).sqrMagnitude;
-        float right = (local.GetBonePosition(HumanBodyBones.RightHand) - grip).sqrMagnitude;
+        float left = (leftHand - grip).sqrMagnitude;
+        float right = (rightHand - grip).sqrMagnitude;
+        // Too close to call (both hands on the grip): vibrate both.
+        if (Mathf.Abs(left - right) < 0.0025f) return 2;
         return left < right ? 0 : 1;
     }
 
@@ -292,9 +301,17 @@ public class FishingRod : MonoBehaviour
     // The steady part of the vibration, from the state every client knows.
     private void HapticTick()
     {
-        if (hapticHand < 0) return;
+        if (!heldHere) return;
         float t = Time.time;
         if (t < nextTickAt) return;
+        if (t < rumbleUntil)
+        {
+            // Landed: rapid, throbbing shakes as the fish fights.
+            rumbleBeat = !rumbleBeat;
+            Pulse(0.12f, rumbleBeat ? 1f : 0.7f);
+            nextTickAt = t + 0.09f;
+            return;
+        }
         if (state == StateWaiting)
         {
             Pulse(0.03f, 0.12f);
@@ -302,13 +319,14 @@ public class FishingRod : MonoBehaviour
         }
         else if (state == StateNibble)
         {
-            Pulse(0.04f, 0.35f);
+            Pulse(0.04f, 0.5f);
             nextTickAt = t + UnityEngine.Random.Range(0.15f, 0.3f);
         }
         else if (state == StateStrike)
         {
-            Pulse(0.2f, 0.85f);
-            nextTickAt = t + 0.25f;
+            // The moment to pull: full strength, pulses overlapping into one continuous buzz.
+            Pulse(0.12f, 1f);
+            nextTickAt = t + 0.08f;
         }
         else
         {
@@ -582,7 +600,7 @@ public class FishingRod : MonoBehaviour
             if (t >= nextThrashAt)
             {
                 nextThrashAt = t + UnityEngine.Random.Range(0.4f, 1.4f);
-                Pulse(0.08f, 0.45f);
+                Pulse(0.08f, 0.7f);
                 fishSwing = new Vector3(UnityEngine.Random.Range(-1f, 1f), 0f, UnityEngine.Random.Range(-1f, 1f));
                 if (inWater && Splash != null)
                 {
@@ -653,15 +671,17 @@ public class FishingRod : MonoBehaviour
         {
             PlayClip(PlopClip, 1f);
             PlaySplash();
-            Pulse(0.3f, 0.9f);
-            nextTickAt = Time.time + 0.3f;
+            Pulse(0.4f, 1f);
+            nextTickAt = Time.time + 0.1f;
         }
         else if (ev == EvCaught)
         {
             PlaySplash();
             PlayClip(SplashClip, 1f);
             PlayClip(CatchClip, 0.8f);
-            Pulse(0.5f, 1f);
+            Pulse(0.6f, 1f);
+            rumbleUntil = Time.time + 2f;
+            nextTickAt = Time.time + 0.5f;
             nextThrashAt = Time.time + 0.6f;
         }
         else if (ev == EvEscaped)
