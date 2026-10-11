@@ -83,6 +83,8 @@ public static partial class FishingWorldBuilder
         AudioClip fanfare = SaveSound("catch", Synth.Fanfare());
         AudioClip escape = SaveSound("escape", Synth.Escape());
         AudioClip click = SaveSound("click", Synth.Click());
+        AudioClip music = SaveSound("forest-bgm", FishingWorldMusic.Render(), FishingWorldMusic.Rate);
+        SetMusicImport(music);
 
         TMP_FontAsset font = JapaneseFont();
         string contentGroupId = ExistingContentGroupId();
@@ -119,6 +121,7 @@ public static partial class FishingWorldBuilder
         BuildForest(environment);
         BuildDecorations(environment);
         BuildClouds(environment);
+        BuildMusic(world.transform, music);
 
         FishingWorldController controller = BuildStand(world.transform, font, click);
         BuildBoard(world.transform, font, controller);
@@ -446,6 +449,24 @@ public static partial class FishingWorldBuilder
                 puff.transform.localScale = new Vector3(s, s * 0.6f, s * 0.8f);
             }
         }
+    }
+
+    // Background music: heard the same everywhere (2D) and deliberately quiet; Basis routes it
+    // through the world volume when the scene loads.
+    const float MusicVolume = 0.06f;
+
+    static void BuildMusic(Transform parent, AudioClip clip)
+    {
+        GameObject go = new GameObject("Background Music");
+        go.transform.SetParent(parent, false);
+        AudioSource source = go.AddComponent<AudioSource>();
+        source.clip = clip;
+        source.loop = true;
+        source.playOnAwake = true;
+        source.spatialBlend = 0f;
+        source.volume = MusicVolume;
+        source.dopplerLevel = 0f;
+        source.priority = 32;
     }
 
     static FishingWorldController BuildStand(Transform parent, TMP_FontAsset font, AudioClip click)
@@ -998,15 +1019,32 @@ public static partial class FishingWorldBuilder
         AssetDatabase.SaveAssets();
     }
 
-    static AudioClip SaveSound(string name, float[] samples)
+    static AudioClip SaveSound(string name, float[] samples, int rate = Synth.Rate)
     {
         string path = $"{Generated}/Audio/{name}.wav";
-        Synth.WriteWav(Path.Combine(Directory.GetCurrentDirectory(), path), samples, Synth.Rate);
+        Synth.WriteWav(Path.Combine(Directory.GetCurrentDirectory(), path), samples, rate);
         AssetDatabase.ImportAsset(path, ImportAssetOptions.ForceUpdate);
         return AssetDatabase.LoadAssetAtPath<AudioClip>(path);
     }
 
-    /// <summary>Tiny procedural sounds, so the world ships no recorded or generated audio files.</summary>
+    // Music is long: compress it and stream it rather than hold a minute of PCM in memory.
+    static void SetMusicImport(AudioClip clip)
+    {
+        AudioImporter importer = (AudioImporter)AssetImporter.GetAtPath(AssetDatabase.GetAssetPath(clip));
+        AudioImporterSampleSettings settings = importer.defaultSampleSettings;
+        if (settings.loadType == AudioClipLoadType.Streaming && settings.compressionFormat == AudioCompressionFormat.Vorbis) return;
+        settings.loadType = AudioClipLoadType.Streaming;
+        settings.compressionFormat = AudioCompressionFormat.Vorbis;
+        settings.quality = 0.5f;
+        importer.defaultSampleSettings = settings;
+        importer.forceToMono = true;
+        importer.SaveAndReimport();
+    }
+
+    /// <summary>
+    /// Small sound effects synthesized from code. Composed and written by an AI assistant, so they
+    /// are AI-generated audio: per AI.md the fishing world is not for the Basis repository.
+    /// </summary>
     static class Synth
     {
         public const int Rate = 44100;
