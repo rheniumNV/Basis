@@ -38,12 +38,13 @@ public class BasisRestClientProp : MonoBehaviour
     public Button PutButton;
     public Button DeleteButton;
 
+    [Header("Url")]
+    public TMP_InputField UrlInput;
+
     [Header("Output")]
-    public TextMeshProUGUI UrlText;
     public TextMeshProUGUI StatusText;
     public TextMeshProUGUI BodyText;
 
-    private string selectedUrl;
     private UnityWebRequest request;
     private string requestMethod;
     private float requestStartedAt;
@@ -65,7 +66,7 @@ public class BasisRestClientProp : MonoBehaviour
         DeleteButton.onClick.AddListener(SendDelete);
 
         SelectA();
-        SetStatus("Ready. Pick an endpoint, then a method.", Color.white);
+        SetStatus("Ready. Type a URL or pick a preset, then a method.", Color.white);
         BodyText.text = "";
     }
 
@@ -85,8 +86,7 @@ public class BasisRestClientProp : MonoBehaviour
 
     private void Select(string url)
     {
-        selectedUrl = url;
-        UrlText.text = url;
+        UrlInput.text = url;
     }
 
     private void SendGet() { Send("GET"); }
@@ -101,9 +101,14 @@ public class BasisRestClientProp : MonoBehaviour
             SetStatus("Still waiting on the previous " + requestMethod + "...", Color.yellow);
             return;
         }
-        if (string.IsNullOrEmpty(selectedUrl)) return;
+        string url = UrlInput.text.Trim();
+        if (url.Length == 0)
+        {
+            SetStatus("Enter a URL first.", Color.yellow);
+            return;
+        }
 
-        request = new UnityWebRequest(selectedUrl, method);
+        request = new UnityWebRequest(url, method);
         request.downloadHandler = new DownloadHandlerBuffer();
         request.timeout = TimeoutSeconds;
         if (method == "POST" || method == "PUT")

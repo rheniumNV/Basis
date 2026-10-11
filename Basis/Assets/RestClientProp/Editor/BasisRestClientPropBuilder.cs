@@ -111,13 +111,12 @@ public static class BasisRestClientPropBuilder
 
         Label(canvasRect, "Title", new Vector2(0f, 230f), new Vector2(600f, 44f), "REST Client", 34, TextAlignmentOptions.Center, FontStyles.Bold);
 
-        Label(canvasRect, "Endpoint Caption", new Vector2(0f, 186f), new Vector2(600f, 24f), "Endpoint", 18, TextAlignmentOptions.Left, FontStyles.Normal);
+        Label(canvasRect, "Endpoint Caption", new Vector2(0f, 186f), new Vector2(600f, 24f), "Presets", 18, TextAlignmentOptions.Left, FontStyles.Normal);
         client.EndpointAButton = MakeButton(canvasRect, "Endpoint A", new Vector2(-200f, 150f), new Vector2(190f, 44f), "httpbin /anything", ButtonColor, 18);
         client.EndpointBButton = MakeButton(canvasRect, "Endpoint B", new Vector2(0f, 150f), new Vector2(190f, 44f), "jsonplaceholder", ButtonColor, 18);
         client.EndpointCButton = MakeButton(canvasRect, "Endpoint C", new Vector2(200f, 150f), new Vector2(190f, 44f), "httpbin 418", ButtonColor, 18);
 
-        client.UrlText = Label(canvasRect, "Url", new Vector2(0f, 110f), new Vector2(600f, 28f), "", 18, TextAlignmentOptions.Left, FontStyles.Italic);
-        client.UrlText.color = new Color(0.7f, 0.8f, 1f);
+        client.UrlInput = MakeInputField(canvasRect, "Url", new Vector2(0f, 108f), new Vector2(600f, 36f), "https://...", 18);
 
         client.GetButton = MakeButton(canvasRect, "GET", new Vector2(-228f, 62f), new Vector2(136f, 50f), "GET", MethodColor, 24);
         client.PostButton = MakeButton(canvasRect, "POST", new Vector2(-76f, 62f), new Vector2(136f, 50f), "POST", MethodColor, 24);
@@ -175,6 +174,51 @@ public static class BasisRestClientPropBuilder
         label.color = Color.white;
         label.raycastTarget = false;
         return label;
+    }
+
+    static TMP_InputField MakeInputField(RectTransform parent, string name, Vector2 position, Vector2 size, string placeholder, float fontSize)
+    {
+        Image background = Panel(parent, name, position, size, new Color(0.06f, 0.07f, 0.09f, 1f));
+        background.raycastTarget = true;
+        RectTransform rect = (RectTransform)background.transform;
+
+        GameObject viewportGo = new GameObject("Text Area", typeof(RectTransform));
+        viewportGo.layer = UILayer;
+        RectTransform viewport = (RectTransform)viewportGo.transform;
+        viewport.SetParent(rect, false);
+        viewport.anchorMin = Vector2.zero;
+        viewport.anchorMax = Vector2.one;
+        viewport.offsetMin = new Vector2(10f, 4f);
+        viewport.offsetMax = new Vector2(-10f, -4f);
+        viewportGo.AddComponent<RectMask2D>();
+
+        TextMeshProUGUI hint = Label(viewport, "Placeholder", Vector2.zero, Vector2.zero, placeholder, fontSize, TextAlignmentOptions.MidlineLeft, FontStyles.Italic);
+        Stretch(hint.rectTransform);
+        hint.color = new Color(1f, 1f, 1f, 0.35f);
+
+        TextMeshProUGUI text = Label(viewport, "Text", Vector2.zero, Vector2.zero, "", fontSize, TextAlignmentOptions.MidlineLeft, FontStyles.Normal);
+        Stretch(text.rectTransform);
+        text.color = new Color(0.7f, 0.8f, 1f);
+        text.textWrappingMode = TextWrappingModes.NoWrap;
+
+        TMP_InputField input = background.gameObject.AddComponent<TMP_InputField>();
+        input.targetGraphic = background;
+        input.textViewport = viewport;
+        input.textComponent = text;
+        input.placeholder = hint;
+        input.lineType = TMP_InputField.LineType.SingleLine;
+        input.contentType = TMP_InputField.ContentType.Standard;
+        input.characterLimit = 0;
+        input.pointSize = fontSize;
+        return input;
+    }
+
+    static void Stretch(RectTransform rect)
+    {
+        rect.anchorMin = Vector2.zero;
+        rect.anchorMax = Vector2.one;
+        rect.offsetMin = Vector2.zero;
+        rect.offsetMax = Vector2.zero;
     }
 
     static Button MakeButton(RectTransform parent, string name, Vector2 position, Vector2 size, string text, Color color, float fontSize)
