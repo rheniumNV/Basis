@@ -24,6 +24,7 @@
     "com.valvesoftware.openxr.utils": "https://github.com/ValveSoftware/Unity.git?path=com.valvesoftware.openxr.utils#28c3b8d9a4ecd7a128906e11c398944d3c8524dc",
     "com.valvesoftware.unity.openvr": "file:com.valvesoftware.unity.openvr-1.2.1.tgz",
     "com.xiph.rnnoise": "https://github.com/BasisVR/RNNoise.Net.git",
+    "io.github.hatayama.uloopmcp": "3.15.0",
     "org.basisvr.base128": "file:org.basisvr.base128-1.2.2.tgz",
     "org.basisvr.bouncycastle": "file:org.basisvr.bouncycastle-2.5.0.tgz",
     "org.basisvr.generator.equals": "file:org.basisvr.generator.equals-3.2.0.tgz",
@@ -67,5 +68,13 @@
     "com.unity.modules.wind": "1.0.0",
     "com.unity.modules.xr": "1.0.0"
   },
-  "scopedRegistries": []
+  "scopedRegistries": [
+    {
+      "name": "package.openupm.com",
+      "url": "https://package.openupm.com",
+      "scopes": [
+        "io.github.hatayama.uloopmcp"
+      ]
+    }
+  ]
 }

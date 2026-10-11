@@ -525,14 +525,14 @@
     },
     "com.unity.nuget.mono-cecil": {
       "version": "1.11.6",
-      "depth": 2,
+      "depth": 1,
       "source": "registry",
       "dependencies": {},
       "url": "https://packages.unity.com"
     },
     "com.unity.nuget.newtonsoft-json": {
       "version": "3.2.2",
-      "depth": 2,
+      "depth": 1,
       "source": "registry",
       "dependencies": {},
       "url": "https://packages.unity.com"
@@ -802,6 +802,17 @@
       "depth": 0,
       "source": "embedded",
       "dependencies": {}
+    },
+    "io.github.hatayama.uloopmcp": {
+      "version": "3.15.0",
+      "depth": 0,
+      "source": "registry",
+      "dependencies": {
+        "com.unity.ugui": "1.0.0",
+        "com.unity.nuget.newtonsoft-json": "3.2.1",
+        "com.unity.nuget.mono-cecil": "1.11.6"
+      },
+      "url": "https://package.openupm.com"
     },
     "jp.keijiro.klak.spout": {
       "version": "file:jp.keijiro.klak.spout",

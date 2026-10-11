@@ -1,6 +1,5 @@
 using NUnit.Framework;
 using System.Collections.Generic;
-using System.Security.Cryptography.Xml;
 using UnityEngine;
 
 namespace Basis.Tests.GlobalIllumination
