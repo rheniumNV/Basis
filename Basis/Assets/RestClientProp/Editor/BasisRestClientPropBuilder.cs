@@ -160,7 +160,7 @@ public static class BasisRestClientPropBuilder
         return root;
     }
 
-    static Image Panel(RectTransform parent, string name, Vector2 position, Vector2 size, Color color)
+    internal static Image Panel(RectTransform parent, string name, Vector2 position, Vector2 size, Color color)
     {
         GameObject go = new GameObject(name, typeof(RectTransform));
         go.layer = UILayer;
@@ -174,7 +174,7 @@ public static class BasisRestClientPropBuilder
         return image;
     }
 
-    static TextMeshProUGUI Label(RectTransform parent, string name, Vector2 position, Vector2 size, string text, float fontSize, TextAlignmentOptions alignment, FontStyles style)
+    internal static TextMeshProUGUI Label(RectTransform parent, string name, Vector2 position, Vector2 size, string text, float fontSize, TextAlignmentOptions alignment, FontStyles style)
     {
         GameObject go = new GameObject(name, typeof(RectTransform));
         go.layer = UILayer;
@@ -192,7 +192,7 @@ public static class BasisRestClientPropBuilder
         return label;
     }
 
-    static TMP_InputField MakeInputField(RectTransform parent, string name, Vector2 position, Vector2 size, string placeholder, float fontSize)
+    internal static TMP_InputField MakeInputField(RectTransform parent, string name, Vector2 position, Vector2 size, string placeholder, float fontSize)
     {
         Image background = Panel(parent, name, position, size, new Color(0.06f, 0.07f, 0.09f, 1f));
         background.raycastTarget = true;
@@ -229,7 +229,7 @@ public static class BasisRestClientPropBuilder
         return input;
     }
 
-    static void Stretch(RectTransform rect)
+    internal static void Stretch(RectTransform rect)
     {
         rect.anchorMin = Vector2.zero;
         rect.anchorMax = Vector2.one;
@@ -237,7 +237,7 @@ public static class BasisRestClientPropBuilder
         rect.offsetMax = Vector2.zero;
     }
 
-    static Button MakeButton(RectTransform parent, string name, Vector2 position, Vector2 size, string text, Color color, float fontSize)
+    internal static Button MakeButton(RectTransform parent, string name, Vector2 position, Vector2 size, string text, Color color, float fontSize)
     {
         Image image = Panel(parent, name, position, size, color);
         image.raycastTarget = true;
