@@ -1,0 +1,24 @@
+{
+  "strings": [
+    { "key": "stand.title", "ja": "釣り竿", "en": "Fishing Rods" },
+    { "key": "stand.hint", "ja": "ボタンを押すと釣り竿が出るよ", "en": "Press the button to get a rod" },
+    { "key": "stand.allOut", "ja": "釣り竿はもう全部出ているよ", "en": "All the rods are already out" },
+    { "key": "stand.tableFull", "ja": "台の上の竿を先に使ってね", "en": "Use the rods on the table first" },
+    { "key": "recent.title", "ja": "さいきんの釣果", "en": "Recent catches" },
+    { "key": "recent.empty", "ja": "まだ誰も釣っていないよ", "en": "Nobody has caught anything yet" },
+    { "key": "recent.you", "ja": "あなた", "en": "You" },
+    { "key": "recent.someone", "ja": "だれか", "en": "Someone" },
+    { "key": "ranking.title", "ja": "レベルランキング", "en": "Level ranking" },
+    { "key": "ranking.empty", "ja": "まだ誰も記録がないよ", "en": "No records yet" },
+    { "key": "error.server", "ja": "サーバーエラー（{0}）", "en": "Server error ({0})" },
+    { "key": "zukan.title", "ja": "あなたの図鑑", "en": "Your fish log" },
+    { "key": "zukan.name", "ja": "なまえ", "en": "Fish" },
+    { "key": "zukan.count", "ja": "釣った数", "en": "Caught" },
+    { "key": "zukan.max", "ja": "最大", "en": "Largest" },
+    { "key": "zukan.min", "ja": "最小", "en": "Smallest" },
+    { "key": "zukan.unknown", "ja": "？？？", "en": "???" },
+    { "key": "reload", "ja": "再読み込み", "en": "Reload" },
+    { "key": "language.title", "ja": "言語", "en": "Language" },
+    { "key": "warning", "ja": "<size=135%><b>！ スクリプトが許可されていません</b></size>\n記録の保存・ランキング・振動が使えません。\nこのワールドのスクリプトの許可が必要です。\n拒否した場合は、Basis を再接続してワールドに入り直し、\n「許可」を選んでください。", "en": "<size=135%><b>! Scripts are not allowed</b></size>\nSaving catches, the ranking and vibration won't work.\nThis world needs its script permissions.\nIf you denied them, reconnect to Basis, enter the world\nagain and choose \"Allow\"." }
+  ]
+}

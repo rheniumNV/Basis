@@ -44,7 +44,9 @@ public class FishingWorldController : MonoBehaviour
     public AudioClip ButtonClip;
 
     [Header("Fish (from Data/fish.json)")]
+    // Japanese names: also the names the record server keeps the catches under.
     public string[] SpeciesNames;
+    public string[] SpeciesNamesEn;
     public float[] SpeciesWeights;
     public float[] SpeciesMinCm;
     public float[] SpeciesMaxCm;
@@ -63,6 +65,21 @@ public class FishingWorldController : MonoBehaviour
     public TextMeshPro RankingText;
     public TextMeshPro StandText;
 
+    [Header("Language (texts from Data/strings.json)")]
+    // Each player picks their own language on the sign; it starts as Japanese when the OS is
+    // Japanese and as English otherwise.
+    public string[] TextKeys;
+    public string[] TextJa;
+    public string[] TextEn;
+    // Fixed labels in the world and the key of the text each shows.
+    public TextMeshPro[] LabelTexts;
+    public string[] LabelKeys;
+    public BasisInteractableButton LanguageJaButton;
+    public BasisInteractableButton LanguageEnButton;
+    public TextMeshPro LanguageCurrent;
+    // The permission warning's text (FishingBackend hides the sign itself once allowed).
+    public TextMeshPro WarningText;
+
     [Header("Reload buttons on the boards")]
     public BasisInteractableButton RankingReloadButton;
     public BasisInteractableButton ZukanReloadButton;
@@ -80,7 +97,13 @@ public class FishingWorldController : MonoBehaviour
 
     private BasisNetworkShim net;
     private int activeMask;
-    private string[] recent;
+    // 0 = Japanese, 1 = English.
+    private int language;
+    // Recent catches, newest first, kept as data so each player shows them in their own language.
+    private int[] recentSpecies;
+    private float[] recentCm;
+    private string[] recentWho;
+    private int[] recentMine;
     private float standMessageUntil;
     // Reloads asked for on the boards, for FishingBackend to pick up: 1 = ranking, 2 = encyclopedia.
     private int reloadRequests;
@@ -98,8 +121,15 @@ public class FishingWorldController : MonoBehaviour
 
     private void Start()
     {
-        recent = new string[RecentCount];
-        for (int i = 0; i < RecentCount; i++) recent[i] = "";
+        recentSpecies = new int[RecentCount];
+        recentCm = new float[RecentCount];
+        recentWho = new string[RecentCount];
+        recentMine = new int[RecentCount];
+        for (int i = 0; i < RecentCount; i++)
+        {
+            recentSpecies[i] = -1;
+            recentWho[i] = "";
+        }
         int n = SpeciesNames.Length;
         myCount = new int[n];
         myMin = new float[n];
@@ -110,6 +140,9 @@ public class FishingWorldController : MonoBehaviour
         SpawnButton.ButtonDown = OnButtonDown;
         if (RankingReloadButton != null) RankingReloadButton.ButtonDown = OnRankingReload;
         if (ZukanReloadButton != null) ZukanReloadButton.ButtonDown = OnZukanReload;
+        if (LanguageJaButton != null) LanguageJaButton.ButtonDown = OnLanguageJa;
+        if (LanguageEnButton != null) LanguageEnButton.ButtonDown = OnLanguageEn;
+        language = Application.systemLanguage == SystemLanguage.Japanese ? 0 : 1;
 
         net = SafeUtil.MakeNetworkable(this);
         if (net != null)
@@ -117,12 +150,9 @@ public class FishingWorldController : MonoBehaviour
             net.NetworkMessageReceived += OnNetworkMessage;
             net.PlayerJoined += OnPlayerJoined;
         }
-        RefreshRecent();
-        RefreshZukan();
         // Status lines stay empty unless the server reports an error.
-        SetRankingText(RankingHeader);
         SetZukanStatus("");
-        SetStandText("ボタンを押すと釣り竿が出るよ");
+        ApplyLanguage();
     }
 
     private void Update()
@@ -130,11 +160,68 @@ public class FishingWorldController : MonoBehaviour
         if (standMessageUntil > 0f && Time.time > standMessageUntil)
         {
             standMessageUntil = 0f;
-            SetStandText("ボタンを押すと釣り竿が出るよ");
+            SetStandText(Text("stand.hint"));
         }
     }
 
-    public const string RankingHeader = "<b>レベルランキング</b>\n";
+    // ---- Language ----
+
+    /// <summary>The text for a key of Data/strings.json in the current language.</summary>
+    public string Text(string key)
+    {
+        for (int i = 0; i < TextKeys.Length; i++)
+        {
+            if (TextKeys[i] == key) return language == 1 ? TextEn[i] : TextJa[i];
+        }
+        return key;
+    }
+
+    public string SpeciesName(int species)
+    {
+        if (language == 1 && species < SpeciesNamesEn.Length && SpeciesNamesEn[species].Length > 0) return SpeciesNamesEn[species];
+        return SpeciesNames[species];
+    }
+
+    public string RankingHeader()
+    {
+        return "<b>" + Text("ranking.title") + "</b>\n";
+    }
+
+    public void OnLanguageJa()
+    {
+        SetLanguage(0);
+    }
+
+    public void OnLanguageEn()
+    {
+        SetLanguage(1);
+    }
+
+    private void SetLanguage(int value)
+    {
+        if (ButtonAudio != null && ButtonClip != null) ButtonAudio.PlayOneShot(ButtonClip, 0.5f);
+        if (language == value) return;
+        language = value;
+        ApplyLanguage();
+    }
+
+    // Redraws everything that shows text in the current language.
+    private void ApplyLanguage()
+    {
+        for (int i = 0; i < LabelTexts.Length; i++)
+        {
+            if (LabelTexts[i] != null) LabelTexts[i].text = Text(LabelKeys[i]);
+        }
+        if (WarningText != null) WarningText.text = Text("warning");
+        if (LanguageCurrent != null) LanguageCurrent.text = language == 1 ? "English" : "日本語";
+        standMessageUntil = 0f;
+        SetStandText(Text("stand.hint"));
+        RefreshRecent();
+        RefreshZukan();
+        // The ranking is drawn by FishingBackend from the server's answer: fetch it again.
+        SetRankingText(RankingHeader());
+        reloadRequests |= 1;
+    }
 
     /// <summary>The ranking board's reload button.</summary>
     public void OnRankingReload()
@@ -174,14 +261,14 @@ public class FishingWorldController : MonoBehaviour
         }
         if (index < 0)
         {
-            SetStandText("釣り竿はもう全部出ているよ");
+            SetStandText(Text("stand.allOut"));
             standMessageUntil = Time.time + 3f;
             return;
         }
         int slot = FreeSlot();
         if (slot < 0)
         {
-            SetStandText("台の上の竿を先に使ってね");
+            SetStandText(Text("stand.tableFull"));
             standMessageUntil = Time.time + 3f;
             return;
         }
@@ -313,13 +400,10 @@ public class FishingWorldController : MonoBehaviour
     {
         if (species < 0 || species >= SpeciesNames.Length) return;
 
-        string who = local ? LocalName() : RemoteName(sender);
-        for (int i = RecentCount - 1; i > 0; i--) recent[i] = recent[i - 1];
-        string mark = IsRare(species) ? "<color=#E0A100>★</color> " : "";
-        recent[0] = mark + "<b>" + SpeciesNames[species] + "</b> " + Mathf.RoundToInt(cm) + "cm  <color=#7A8A80><noparse>" + who + "</noparse></color>";
+        AddRecent(species, cm, local ? LocalName() : RemoteName(sender), local ? 1 : 0);
         RefreshRecent();
 
-        SetStandText(SpeciesNames[species] + " " + Mathf.RoundToInt(cm) + "cm!");
+        SetStandText(SpeciesName(species) + " " + Mathf.RoundToInt(cm) + "cm!");
         standMessageUntil = Time.time + 4f;
 
         if (local)
@@ -330,18 +414,34 @@ public class FishingWorldController : MonoBehaviour
         }
     }
 
+    // Display names, or "" when unknown (shown as "someone").
     private string LocalName()
     {
         IBasisPlayer player = BasisPlayersShim.Local;
-        if (player == null) return "あなた";
+        if (player == null) return "";
         return player.DisplayName;
     }
 
     private string RemoteName(ushort id)
     {
         IBasisPlayer player = BasisPlayersShim.GetById(id);
-        if (player == null) return "だれか";
+        if (player == null) return "";
         return player.DisplayName;
+    }
+
+    private void AddRecent(int species, float cm, string who, int mine)
+    {
+        for (int i = RecentCount - 1; i > 0; i--)
+        {
+            recentSpecies[i] = recentSpecies[i - 1];
+            recentCm[i] = recentCm[i - 1];
+            recentWho[i] = recentWho[i - 1];
+            recentMine[i] = recentMine[i - 1];
+        }
+        recentSpecies[0] = species;
+        recentCm[0] = cm;
+        recentWho[0] = who == null ? "" : who;
+        recentMine[0] = mine;
     }
 
     // ---- Catches waiting for the server (FishingBackend pulls these) ----
@@ -443,7 +543,7 @@ public class FishingWorldController : MonoBehaviour
         for (int i = 0; i < SpeciesNames.Length && i < ZukanName.Length; i++)
         {
             bool caught = myCount[i] > 0;
-            ZukanName[i].text = caught ? SpeciesNames[i] : "？？？";
+            ZukanName[i].text = caught ? SpeciesName(i) : Text("zukan.unknown");
             ZukanCount[i].text = caught ? "×" + myCount[i] : "-";
             ZukanMax[i].text = caught ? FormatCm(myMax[i]) : "-";
             ZukanMin[i].text = caught ? FormatCm(myMin[i]) : "-";
@@ -467,16 +567,37 @@ public class FishingWorldController : MonoBehaviour
     {
         if (RecentText == null) return;
         StringBuilder builder = new StringBuilder();
-        builder.Append("<b>さいきんの釣果</b>\n");
+        builder.Append("<b>");
+        builder.Append(Text("recent.title"));
+        builder.Append("</b>\n");
         bool any = false;
         for (int i = 0; i < RecentCount; i++)
         {
-            if (recent[i].Length == 0) continue;
-            builder.Append(recent[i]);
-            builder.Append("\n");
+            int species = recentSpecies[i];
+            if (species < 0 || species >= SpeciesNames.Length) continue;
+            if (IsRare(species)) builder.Append("<color=#E0A100>★</color> ");
+            builder.Append("<b>");
+            builder.Append(SpeciesName(species));
+            builder.Append("</b> ");
+            builder.Append(Mathf.RoundToInt(recentCm[i]));
+            builder.Append("cm  <color=#7A8A80>");
+            if (recentMine[i] != 0) builder.Append(Text("recent.you"));
+            else if (recentWho[i].Length == 0) builder.Append(Text("recent.someone"));
+            else
+            {
+                builder.Append("<noparse>");
+                builder.Append(recentWho[i]);
+                builder.Append("</noparse>");
+            }
+            builder.Append("</color>\n");
             any = true;
         }
-        if (!any) builder.Append("<color=#7A8A80>まだ誰も釣っていないよ</color>");
+        if (!any)
+        {
+            builder.Append("<color=#7A8A80>");
+            builder.Append(Text("recent.empty"));
+            builder.Append("</color>");
+        }
         RecentText.text = builder.ToString();
     }
 
@@ -491,16 +612,43 @@ public class FishingWorldController : MonoBehaviour
     {
         if (player == null || net == null || !net.IsOwnedLocallyOnServer) return;
 
-        // [MsgSnapshot, mask (4 bytes), then the recent lines as UTF-8]
-        string joined = string.Join("\n", recent);
-        byte[] text = Encoding.UTF8.GetBytes(joined);
-        byte[] buffer = new byte[5 + text.Length];
+        // [MsgSnapshot, mask (4 bytes), count, then per catch: species, cm (4 bytes),
+        //  name length (2 bytes), name as UTF-8]. "Mine" catches go out under the owner's name.
+        int count = 0;
+        int size = 6;
+        byte[][] names = new byte[RecentCount][];
+        for (int i = 0; i < RecentCount; i++)
+        {
+            if (recentSpecies[i] < 0) continue;
+            string who = recentWho[i];
+            if (recentMine[i] != 0 && who.Length == 0) who = LocalName();
+            names[i] = Encoding.UTF8.GetBytes(who == null ? "" : who);
+            size += 7 + names[i].Length;
+            count++;
+        }
+        byte[] buffer = new byte[size];
         buffer[0] = MsgSnapshot;
         buffer[1] = (byte)(activeMask & 0xFF);
         buffer[2] = (byte)((activeMask >> 8) & 0xFF);
         buffer[3] = (byte)((activeMask >> 16) & 0xFF);
         buffer[4] = (byte)((activeMask >> 24) & 0xFF);
-        for (int i = 0; i < text.Length; i++) buffer[5 + i] = text[i];
+        buffer[5] = (byte)count;
+        int at = 6;
+        // Oldest first, so the receiver can add them in order.
+        for (int i = RecentCount - 1; i >= 0; i--)
+        {
+            if (recentSpecies[i] < 0) continue;
+            buffer[at] = (byte)recentSpecies[i];
+            byte[] cm = System.BitConverter.GetBytes(recentCm[i]);
+            buffer[at + 1] = cm[0];
+            buffer[at + 2] = cm[1];
+            buffer[at + 3] = cm[2];
+            buffer[at + 4] = cm[3];
+            buffer[at + 5] = (byte)(names[i].Length & 0xFF);
+            buffer[at + 6] = (byte)((names[i].Length >> 8) & 0xFF);
+            for (int k = 0; k < names[i].Length; k++) buffer[at + 7 + k] = names[i][k];
+            at += 7 + names[i].Length;
+        }
         net.SendCustomNetworkEvent(buffer, DeliveryMethod.ReliableOrdered, new ushort[] { player.playerId });
     }
 
@@ -512,7 +660,7 @@ public class FishingWorldController : MonoBehaviour
         {
             ActivateRod(buffer[1], buffer[2]);
         }
-        else if (buffer[0] == MsgSnapshot && buffer.Length >= 5)
+        else if (buffer[0] == MsgSnapshot && buffer.Length >= 6)
         {
             int mask = buffer[1] | (buffer[2] << 8) | (buffer[3] << 16) | (buffer[4] << 24);
             for (int i = 0; i < Rods.Length; i++)
@@ -520,9 +668,18 @@ public class FishingWorldController : MonoBehaviour
                 // Rods already out keep the pose their pickup sync gives them.
                 if ((mask & (1 << i)) != 0) ActivateRod(i, -1);
             }
-            string joined = Encoding.UTF8.GetString(buffer, 5, buffer.Length - 5);
-            string[] lines = joined.Split('\n');
-            for (int i = 0; i < RecentCount; i++) recent[i] = i < lines.Length ? lines[i] : "";
+            int count = buffer[5];
+            int at = 6;
+            for (int i = 0; i < count && at + 7 <= buffer.Length; i++)
+            {
+                int species = buffer[at];
+                float cm = System.BitConverter.ToSingle(buffer, at + 1);
+                int nameLength = buffer[at + 5] | (buffer[at + 6] << 8);
+                if (at + 7 + nameLength > buffer.Length) break;
+                string who = Encoding.UTF8.GetString(buffer, at + 7, nameLength);
+                if (species < SpeciesNames.Length) AddRecent(species, cm, who, 0);
+                at += 7 + nameLength;
+            }
             RefreshRecent();
         }
     }

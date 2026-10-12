@@ -5,6 +5,7 @@
   "fish": [
     {
       "name": "フナ",
+      "nameEn": "Crucian carp",
       "weight": 35,
       "minCm": 12,
       "maxCm": 28,
@@ -15,6 +16,7 @@
     },
     {
       "name": "コイ",
+      "nameEn": "Carp",
       "weight": 25,
       "minCm": 30,
       "maxCm": 75,
@@ -25,6 +27,7 @@
     },
     {
       "name": "ニジマス",
+      "nameEn": "Rainbow trout",
       "weight": 20,
       "minCm": 20,
       "maxCm": 50,
@@ -35,6 +38,7 @@
     },
     {
       "name": "ナマズ",
+      "nameEn": "Catfish",
       "weight": 12,
       "minCm": 35,
       "maxCm": 90,
@@ -45,6 +49,7 @@
     },
     {
       "name": "金のコイ",
+      "nameEn": "Golden carp",
       "weight": 6,
       "minCm": 40,
       "maxCm": 80,
@@ -55,6 +60,7 @@
     },
     {
       "name": "長靴",
+      "nameEn": "Old boot",
       "weight": 2,
       "minCm": 26,
       "maxCm": 30,

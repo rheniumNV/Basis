@@ -234,10 +234,10 @@ public class FishingBackend : MonoBehaviour
     // simply unreachable): on the ranking in place of the list, on the encyclopedia's status line.
     private void ShowError(int kind, long status)
     {
-        string message = "<color=#B5651D>サーバーエラー（" + status + "）</color>";
+        string message = "<color=#B5651D>" + Controller.Text("error.server").Replace("{0}", status.ToString()) + "</color>";
         if (kind == KindRanking)
         {
-            Controller.SetRankingText(FishingWorldController.RankingHeader + message);
+            Controller.SetRankingText(Controller.RankingHeader() + message);
         }
         else
         {
@@ -264,7 +264,7 @@ public class FishingBackend : MonoBehaviour
     private string FormatRanking(string json)
     {
         StringBuilder text = new StringBuilder();
-        text.Append("<b>レベルランキング</b>\n");
+        text.Append(Controller.RankingHeader());
         int at = ArrayStart(json, "entries");
         int end;
         int shown = 0;
@@ -288,7 +288,7 @@ public class FishingBackend : MonoBehaviour
             shown++;
             at = end + 1;
         }
-        if (shown == 0) text.Append("<color=#7A8A80>まだ誰も記録がないよ</color>");
+        if (shown == 0) text.Append("<color=#7A8A80>" + Controller.Text("ranking.empty") + "</color>");
         return text.ToString();
     }
 

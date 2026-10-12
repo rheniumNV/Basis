@@ -48,6 +48,8 @@ public static partial class FishingWorldBuilder
 
     const string FishDataPath = Root + "/Data/fish.json";
     const string BackendDataPath = Root + "/Data/backend.json";
+    const string StringsDataPath = Root + "/Data/strings.json";
+    static readonly Vector3 LanguagePosition = new Vector3(-2.6f, 0f, -18.2f);
 
     // The fish table and the server settings, edited by hand in Data/ (see Data/README.md).
     [System.Serializable]
@@ -63,6 +65,7 @@ public static partial class FishingWorldBuilder
     class FishEntry
     {
         public string name;
+        public string nameEn = "";
         public float weight;
         public float minCm;
         public float maxCm;
@@ -97,8 +100,43 @@ public static partial class FishingWorldBuilder
     }
 
     static FishData fishData;
+
+    [System.Serializable]
+    class StringsData
+    {
+        public StringEntry[] strings;
+    }
+
+    [System.Serializable]
+    class StringEntry
+    {
+        public string key;
+        public string ja;
+        public string en;
+    }
+
+    static StringsData stringsData;
+    // Fixed labels in the world, redrawn by the controller in the player's language.
+    static List<TextMeshPro> labelTexts;
+    static List<string> labelKeys;
+
+    // The Japanese text for a key: what fixed labels show until the controller runs.
+    static string Ja(string key)
+    {
+        foreach (StringEntry entry in stringsData.strings) if (entry.key == key) return entry.ja;
+        throw new System.Exception(StringsDataPath + ": no text for '" + key + "'");
+    }
+
+    static TextMeshPro Localize(TextMeshPro text, string key)
+    {
+        text.text = Ja(key);
+        labelTexts.Add(text);
+        labelKeys.Add(key);
+        return text;
+    }
     // The rod stand's permission warning, handed to FishingBackend, which hides it.
     static GameObject scriptWarning;
+    static TextMeshPro controllerWarningText;
 
     static FishData LoadFishData()
     {
@@ -150,6 +188,9 @@ public static partial class FishingWorldBuilder
         SetMusicImport(music);
 
         fishData = LoadFishData();
+        stringsData = JsonUtility.FromJson<StringsData>(File.ReadAllText(StringsDataPath));
+        labelTexts = new List<TextMeshPro>();
+        labelKeys = new List<string>();
         BackendData backend = JsonUtility.FromJson<BackendData>(File.ReadAllText(BackendDataPath));
         TMP_FontAsset font = JapaneseFont();
         string contentGroupId = ExistingContentGroupId();
@@ -191,6 +232,12 @@ public static partial class FishingWorldBuilder
         FishingWorldController controller = BuildStand(world.transform, font, click);
         BuildBoard(world.transform, font, controller);
         BuildZukanBoard(world.transform, font, controller);
+        BuildLanguageSign(world.transform, font, controller);
+        controller.TextKeys = System.Array.ConvertAll(stringsData.strings, e => e.key);
+        controller.TextJa = System.Array.ConvertAll(stringsData.strings, e => e.ja);
+        controller.TextEn = System.Array.ConvertAll(stringsData.strings, e => e.en);
+        controller.LabelTexts = labelTexts.ToArray();
+        controller.LabelKeys = labelKeys.ToArray();
 
         FishingBackend server = controller.gameObject.AddComponent<FishingBackend>();
         server.Controller = controller;
@@ -379,6 +426,7 @@ public static partial class FishingWorldBuilder
             if ((p - StandPosition).sqrMagnitude < 2.6f * 2.6f) continue;
             if ((p - BoardPosition).sqrMagnitude < 2.2f * 2.2f) continue;
             if ((p - ZukanPosition).sqrMagnitude < 2.2f * 2.2f) continue;
+            if ((p - LanguagePosition).sqrMagnitude < 2.2f * 2.2f) continue;
             if ((p - SpawnPosition).sqrMagnitude < 4f * 4f) continue;
 
             bool tooClose = false;
@@ -461,7 +509,7 @@ public static partial class FishingWorldBuilder
             float r = 7.8f + (float)random.NextDouble() * 24f;
             Vector3 p = new Vector3(Mathf.Cos(a) * r, 0f, Mathf.Sin(a) * r);
             bool onPath = Mathf.Abs(p.x) < 1.6f && p.z < -6f && p.z > -22f;
-            if ((p - StandPosition).sqrMagnitude < 1.5f * 1.5f || (p - BoardPosition).sqrMagnitude < 1.5f * 1.5f || (p - ZukanPosition).sqrMagnitude < 1.6f * 1.6f) continue;
+            if ((p - StandPosition).sqrMagnitude < 1.5f * 1.5f || (p - BoardPosition).sqrMagnitude < 1.5f * 1.5f || (p - ZukanPosition).sqrMagnitude < 1.6f * 1.6f || (p - LanguagePosition).sqrMagnitude < 1.4f * 1.4f) continue;
             p = OnGround(p);
             double kind = random.NextDouble();
             if (kind < 0.3)
@@ -588,7 +636,7 @@ public static partial class FishingWorldBuilder
         interactable.DisabledColor = Hex("C8C8C8");
         interactable.InteractRange = 2.5f;
 
-        TextMeshPro title = Text(stand, "Stand Title", font, "釣り竿", 2.6f, new Vector2(1.6f, 0.3f), Hex("6B4A2E"));
+        TextMeshPro title = Localize(Text(stand, "Stand Title", font, "", 2.6f, new Vector2(1.6f, 0.3f), Hex("6B4A2E")), "stand.title");
         Place(title, new Vector3(0f, 1.78f, 0.485f));
         TextMeshPro hint = Text(stand, "Stand Hint", font, "", 1.3f, new Vector2(2.2f, 0.2f), Hex("6B4A2E"));
         Place(hint, new Vector3(0f, 1.27f, 0.485f));
@@ -601,13 +649,16 @@ public static partial class FishingWorldBuilder
         warning.localPosition = new Vector3(-2.387f, 1.089f, -1.632f);
         Box(warning, "Border", Vector3.zero, new Vector3(2.2f, 0.92f, 0.02f), Quaternion.identity, Mat("Warning Border", Hex("D9534F")), false).transform.localPosition = new Vector3(0f, 0f, 0.012f);
         Box(warning, "Panel", Vector3.zero, new Vector3(2.12f, 0.84f, 0.02f), Quaternion.identity, Mat("Warning Panel", Hex("FDE3E0")), false).transform.localPosition = Vector3.zero;
+        // Both languages until a script runs: if none does, nothing can pick one.
         TextMeshPro warningText = Text(warning, "Text", font,
-            "<size=135%><b>！ スクリプトが許可されていません</b></size>\n" +
+            "<size=125%><b>！ スクリプトが許可されていません</b></size>\n" +
+            "<size=110%><b>! Scripts are not allowed</b></size>\n" +
             "記録の保存・ランキング・振動が使えません。\n" +
-            "このワールドのスクリプトの許可が必要です。\n" +
-            "拒否した場合は、Basis を再接続してワールドに入り直し、\n" +
-            "「許可」を選んでください。",
-            0.62f, new Vector2(2.02f, 0.78f), Hex("8A1C1C"));
+            "Saving catches, the ranking and vibration won't work.\n" +
+            "Basis に再接続して入り直し、「許可」を選んでください。\n" +
+            "Reconnect, enter the world again and choose \"Allow\".",
+            0.58f, new Vector2(2.02f, 0.78f), Hex("8A1C1C"));
+        controllerWarningText = warningText;
         warningText.textWrappingMode = TextWrappingModes.NoWrap;
         Place(warningText, new Vector3(0f, 0f, -0.015f));
 
@@ -626,9 +677,11 @@ public static partial class FishingWorldBuilder
         controller.RodSlots = RodSlots;
         controller.RodLayerMask = 1 << InteractableLayer;
         controller.StandText = hint;
+        controller.WarningText = controllerWarningText;
         scriptWarning = warning.gameObject;
         FishEntry[] fish = fishData.fish;
         controller.SpeciesNames = System.Array.ConvertAll(fish, f => f.name);
+        controller.SpeciesNamesEn = System.Array.ConvertAll(fish, f => f.nameEn ?? "");
         controller.SpeciesWeights = System.Array.ConvertAll(fish, f => f.weight);
         controller.SpeciesMinCm = System.Array.ConvertAll(fish, f => f.minCm);
         controller.SpeciesMaxCm = System.Array.ConvertAll(fish, f => f.maxCm);
@@ -673,16 +726,24 @@ public static partial class FishingWorldBuilder
         controller.RankingReloadButton = ReloadButton(board, font, new Vector3(1.12f, 2.25f, -0.06f));
     }
 
-    // A small physical button with a "再読み込み" label, sitting on a board's face.
+    // A small physical reload button on a board's face; its label follows the language.
     static BasisInteractableButton ReloadButton(Transform board, TMP_FontAsset font, Vector3 localPosition)
     {
-        Transform root = new GameObject("Reload Button").transform;
-        root.SetParent(board, false);
+        BasisInteractableButton button = LabelledButton(board, font, "Reload Button", "", localPosition, 0.34f, out TextMeshPro label);
+        Localize(label, "reload");
+        return button;
+    }
+
+    // A small physical button with a text label on its face.
+    static BasisInteractableButton LabelledButton(Transform parent, TMP_FontAsset font, string name, string text, Vector3 localPosition, float width, out TextMeshPro label)
+    {
+        Transform root = new GameObject(name).transform;
+        root.SetParent(parent, false);
         root.localPosition = localPosition;
         Color color = Hex("A8D8B9");
-        GameObject cap = Box(root, "Cap", Vector3.zero, new Vector3(0.34f, 0.1f, 0.05f), Quaternion.identity, Mat("Reload Button", color), true);
+        GameObject cap = Box(root, "Cap", Vector3.zero, new Vector3(width, 0.1f, 0.05f), Quaternion.identity, Mat("Reload Button", color), true);
         cap.transform.localPosition = Vector3.zero;
-        TextMeshPro label = Text(root, "Label", font, "再読み込み", 0.55f, new Vector2(0.32f, 0.08f), Hex("2F4F3A"));
+        label = Text(root, "Label", font, text, 0.55f, new Vector2(width - 0.02f, 0.08f), Hex("2F4F3A"));
         Place(label, new Vector3(0f, 0f, -0.03f));
 
         BasisInteractableButton button = root.gameObject.AddComponent<BasisInteractableButton>();
@@ -721,7 +782,8 @@ public static partial class FishingWorldBuilder
         float top = panelCenter + panelHeight * 0.5f - 0.12f;
         Color ink = Hex("4A5A50");
         Color faint = Hex("7A8A80");
-        TextMeshPro title = Text(board, "Title", font, "<b>あなたの図鑑</b>", 1.1f, new Vector2(1.4f, 0.16f), ink);
+        TextMeshPro title = Localize(Text(board, "Title", font, "", 1.1f, new Vector2(1.4f, 0.16f), ink), "zukan.title");
+        title.fontStyle = FontStyles.Bold;
         title.alignment = TextAlignmentOptions.Left;
         Place(title, new Vector3(-0.42f, top, -0.035f));
         TextMeshPro status = Text(board, "Status", font, "", 0.6f, new Vector2(1.2f, 0.12f), faint);
@@ -735,10 +797,10 @@ public static partial class FishingWorldBuilder
         // Columns: name | count | largest + crown | smallest + crown.
         float nameX = -1.1f, countX = -0.18f, maxX = 0.25f, minX = 0.82f;
         float headerY = top - 0.17f;
-        Header(board, font, "なまえ", nameX, headerY, faint, TextAlignmentOptions.Left);
-        Header(board, font, "釣った数", countX, headerY, faint, TextAlignmentOptions.Right);
-        Header(board, font, "最大", maxX, headerY, faint, TextAlignmentOptions.Right);
-        Header(board, font, "最小", minX, headerY, faint, TextAlignmentOptions.Right);
+        Header(board, font, "zukan.name", nameX, headerY, faint, TextAlignmentOptions.Left);
+        Header(board, font, "zukan.count", countX, headerY, faint, TextAlignmentOptions.Right);
+        Header(board, font, "zukan.max", maxX, headerY, faint, TextAlignmentOptions.Right);
+        Header(board, font, "zukan.min", minX, headerY, faint, TextAlignmentOptions.Right);
 
         controller.ZukanName = new TextMeshPro[rows];
         controller.ZukanCount = new TextMeshPro[rows];
@@ -776,11 +838,33 @@ public static partial class FishingWorldBuilder
         return text;
     }
 
-    static void Header(Transform board, TMP_FontAsset font, string label, float x, float y, Color color, TextAlignmentOptions alignment)
+    static void Header(Transform board, TMP_FontAsset font, string key, float x, float y, Color color, TextAlignmentOptions alignment)
     {
-        TextMeshPro text = Cell(board, font, "Header " + label, x, y, 0.5f, color, alignment);
+        TextMeshPro text = Cell(board, font, "Header " + key, x, y, 0.5f, color, alignment);
         text.fontSize = 0.6f;
-        text.text = label;
+        Localize(text, key);
+    }
+
+    // A small sign by the spawn with a button per language. Its title names both languages so
+    // anyone can find it; the line under the buttons shows the one in use.
+    static void BuildLanguageSign(Transform parent, TMP_FontAsset font, FishingWorldController controller)
+    {
+        Transform sign = Group(parent, "Language Sign");
+        sign.position = OnGround(LanguagePosition);
+        sign.rotation = Quaternion.Euler(0f, -35f, 0f);
+        Material wood = Mat("Stand Wood Dark", Hex("BF946B"));
+        Local(Box(sign, "Post", Vector3.zero, new Vector3(0.08f, 1.3f, 0.08f), Quaternion.identity, wood, true), new Vector3(0f, 0.65f, 0.05f));
+        Local(Box(sign, "Panel", Vector3.zero, new Vector3(0.9f, 0.5f, 0.05f), Quaternion.identity, Mat("Board", Hex("FFF8EC")), true), new Vector3(0f, 1.3f, 0f));
+        Local(Box(sign, "Frame Top", Vector3.zero, new Vector3(0.96f, 0.05f, 0.08f), Quaternion.identity, wood, false), new Vector3(0f, 1.56f, 0f));
+        Local(Box(sign, "Frame Bottom", Vector3.zero, new Vector3(0.96f, 0.05f, 0.08f), Quaternion.identity, wood, false), new Vector3(0f, 1.04f, 0f));
+
+        TextMeshPro title = Text(sign, "Title", font, "<b>言語 / Language</b>", 0.8f, new Vector2(0.86f, 0.12f), Hex("4A5A50"));
+        Place(title, new Vector3(0f, 1.46f, -0.03f));
+        controller.LanguageJaButton = LabelledButton(sign, font, "Japanese Button", "日本語", new Vector3(-0.2f, 1.31f, -0.04f), 0.34f, out TextMeshPro ja);
+        controller.LanguageEnButton = LabelledButton(sign, font, "English Button", "English", new Vector3(0.2f, 1.31f, -0.04f), 0.34f, out TextMeshPro en);
+        TextMeshPro current = Text(sign, "Current", font, "", 0.6f, new Vector2(0.86f, 0.1f), Hex("7A8A80"));
+        Place(current, new Vector3(0f, 1.15f, -0.03f));
+        controller.LanguageCurrent = current;
     }
 
     // A small low-poly crown: a band with three points, hidden until the controller shows it.
@@ -1255,7 +1339,7 @@ public static partial class FishingWorldBuilder
         font.material.name = "NotoSansJP SDF Material";
         AssetDatabase.AddObjectToAsset(font.material, font);
         // Bake the fixed text in, so it shows even before the dynamic atlas fills.
-        font.TryAddCharacters("許可されていません記録保存ランキング図鑑振動再読み込中エラー前回読んだプレイヤーIDを取得しばらくしてから！スクリプトが動いていません使えません許可必要拒否場合再起動入直選記録サーバー保存され釣り竿ボタンを押すと釣り竿が出るよもう全部出ているさいきんの釣果まだ誰も釣っていないよ図鑑？×があなただれかフナコイニジマスナマズ金のコイ長靴cm!★…0123456789()");
+        font.TryAddCharacters("言語Language日本語English許可されていません記録保存ランキング図鑑振動再読み込中エラー前回読んだプレイヤーIDを取得しばらくしてから！スクリプトが動いていません使えません許可必要拒否場合再起動入直選記録サーバー保存され釣り竿ボタンを押すと釣り竿が出るよもう全部出ているさいきんの釣果まだ誰も釣っていないよ図鑑？×があなただれかフナコイニジマスナマズ金のコイ長靴cm!★…0123456789()");
         UseWorldTextShader(font);
         EditorUtility.SetDirty(font);
         AssetDatabase.SaveAssets();
