@@ -31,7 +31,7 @@ public static partial class SharePanelBuilder
     const float RowHeight = 0.105f;
     const float RowWidth = 1.17f;
     const float FirstRowY = 0.39f;
-    const float ActionWidth = 0.085f;
+    const float ActionWidth = 0.105f;
     const float ActionGap = 0.006f;
 
     static readonly Dictionary<string, Material> materials = new Dictionary<string, Material>();
@@ -126,12 +126,16 @@ public static partial class SharePanelBuilder
         panel.FilterKinds = new[] { -1, 0, 1, 2, 7, 3, 4, 5 };
         panel.FilterButtons = new BasisInteractableButton[panel.FilterKinds.Length];
         panel.FilterLabels = new TextMeshPro[panel.FilterKinds.Length];
+        panel.FilterLamps = new MeshRenderer[panel.FilterKinds.Length];
         for (int i = 0; i < panel.FilterKinds.Length; i++)
         {
             panel.FilterButtons[i] = LabelledButton(root.transform, font, "Filter " + i, "", new Vector3(listLeft + 0.07f + i * 0.145f, filterY, Face), 0.135f, 0.06f, out TextMeshPro label);
             label.fontSize = 0.27f;
-            label.richText = true;
+            Place(label, new Vector3(0f, 0.005f, -0.0075f));
             panel.FilterLabels[i] = label;
+            // The lamp along the bottom of the button: the kind's colour when on, grey when off.
+            GameObject lamp = Box(panel.FilterButtons[i].transform, "Lamp", new Vector3(0f, -0.021f, -0.0072f), new Vector3(0.115f, 0.009f, 0.002f), Mat("Lamp", Color.white));
+            panel.FilterLamps[i] = lamp.GetComponent<MeshRenderer>();
         }
 
         // List.
@@ -254,7 +258,7 @@ public static partial class SharePanelBuilder
         {
             float x = actionsLeft + ActionWidth * 0.5f + i * (ActionWidth + ActionGap);
             row.ActionButtons[i] = LabelledButton(content, font, "Action " + (i + 1), "", new Vector3(x, 0f, Face), ActionWidth, 0.07f, out TextMeshPro label);
-            label.fontSize = 0.25f;
+            label.fontSize = 0.24f;
             row.ActionLabels[i] = label;
         }
         return row;

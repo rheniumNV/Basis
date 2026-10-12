@@ -41,6 +41,10 @@ public class SharePanel : MonoBehaviour
     public const int ActionSave = 3;
     public const int ActionOpen = 4;
     public const int ActionConnect = 5;
+    // Saving an orb (world, prop, avatar, server) through Basis' own save dialog.
+    public const int ActionSaveOrb = 6;
+    // Spawning a shared prop in front of whoever pressed it.
+    public const int ActionSpawn = 7;
 
     private const byte MsgOrder = 1;
     private const byte MsgView = 2;
@@ -51,6 +55,8 @@ public class SharePanel : MonoBehaviour
     // Shares already there when the panel first looks have no known time.
     private const float FirstLookSeconds = 3f;
     private const float ConfirmSeconds = 6f;
+    // Filter bits by kind; "other" shares (folders, dolly tracks) show only with every filter on.
+    private const int AllKinds = (1 << KindPhoto) | (1 << KindLink) | (1 << KindText) | (1 << KindWorld) | (1 << KindProp) | (1 << KindAvatar) | (1 << KindServer);
 
     public SharePanelRow[] Rows;
     public TextMeshPro TitleText;
@@ -60,10 +66,15 @@ public class SharePanel : MonoBehaviour
     public BasisInteractableButton PrevPageButton;
     public BasisInteractableButton NextPageButton;
 
-    // Filter buttons, in the order of FilterKinds (-1 = everything).
+    // Filter buttons, in the order of FilterKinds (-1 = turn every kind on). Each kind is its
+    // own switch, shown by its lamp.
     public BasisInteractableButton[] FilterButtons;
     public TextMeshPro[] FilterLabels;
+    public MeshRenderer[] FilterLamps;
     public int[] FilterKinds;
+    public Color FilterOffColor = new Color(0.82f, 0.83f, 0.85f);
+    public Color FilterOnText = new Color(0.18f, 0.31f, 0.23f);
+    public Color FilterOffText = new Color(0.6f, 0.62f, 0.65f);
 
     public BasisInteractableButton LanguageJaButton;
     public BasisInteractableButton LanguageEnButton;
@@ -104,6 +115,7 @@ public class SharePanel : MonoBehaviour
     private string[] itemBody;
     private Texture[] itemThumb;
     private float[] itemAspect;
+    private int[] itemSaved;
     private int itemCount;
     // Staging for the refresh in progress.
     private string[] nextKey;
@@ -113,6 +125,7 @@ public class SharePanel : MonoBehaviour
     private string[] nextBody;
     private Texture[] nextThumb;
     private float[] nextAspect;
+    private int[] nextSaved;
     private int nextCount;
 
     // When each share was first seen (UTC ticks, 0 = before the panel was there) and who shared
@@ -123,7 +136,7 @@ public class SharePanel : MonoBehaviour
     // Shared view.
     private List<string> order;
     private int page;
-    private int filter;
+    private int filterMask;
     private string selectedKey;
     private int previewPage;
     private int moveEnabled;
@@ -155,6 +168,7 @@ public class SharePanel : MonoBehaviour
         itemBody = new string[Capacity];
         itemThumb = new Texture[Capacity];
         itemAspect = new float[Capacity];
+        itemSaved = new int[Capacity];
         nextKey = new string[Capacity];
         nextKind = new int[Capacity];
         nextTitle = new string[Capacity];
@@ -162,14 +176,16 @@ public class SharePanel : MonoBehaviour
         nextBody = new string[Capacity];
         nextThumb = new Texture[Capacity];
         nextAspect = new float[Capacity];
+        nextSaved = new int[Capacity];
         display = new int[Capacity];
         seenAt = new Dictionary<string, long>();
         sharerOf = new Dictionary<string, string>();
         order = new List<string>();
         selectedKey = "";
         confirmKey = "";
-        filter = -1;
-        moveEnabled = 1;
+        filterMask = AllKinds;
+        // Fixed in place until someone turns moving on, so a press never drags the board.
+        moveEnabled = 0;
         previewPages = new string[1];
         previewPages[0] = "";
         previewPageCount = 1;
@@ -283,17 +299,39 @@ public class SharePanel : MonoBehaviour
 
     private void SetFilter(int button)
     {
-        filter = FilterKinds[button];
+        int kind = FilterKinds[button];
+        // "All" turns every kind on, or off when they are all on already (then pick a few).
+        if (kind < 0) filterMask = filterMask == AllKinds ? 0 : AllKinds;
+        else filterMask ^= 1 << kind;
         page = 0;
         SendView();
         Render();
     }
 
-    private string FilterLabel(int button)
+    private bool FilterOn(int button)
     {
         int kind = FilterKinds[button];
-        string label = kind < 0 ? T("すべて", "All") : KindLabel(kind);
-        return kind == filter ? "<b><u>" + label + "</u></b>" : label;
+        return kind < 0 ? filterMask == AllKinds : (filterMask & (1 << kind)) != 0;
+    }
+
+    private bool Shown(int kind)
+    {
+        if (kind == KindOther) return filterMask == AllKinds;
+        return (filterMask & (1 << kind)) != 0;
+    }
+
+    private void RenderFilters()
+    {
+        MaterialPropertyBlock block = new MaterialPropertyBlock();
+        for (int i = 0; i < FilterLabels.Length; i++)
+        {
+            int kind = FilterKinds[i];
+            bool on = FilterOn(i);
+            FilterLabels[i].text = kind < 0 ? T("すべて", "All") : KindLabel(kind);
+            FilterLabels[i].color = on ? FilterOnText : FilterOffText;
+            block.SetColor("_BaseColor", on ? (kind < 0 ? FilterOnText : KindColor(kind)) : FilterOffColor);
+            FilterLamps[i].SetPropertyBlock(block);
+        }
     }
 
     // ---- Called by the source (permission-gated) ----
@@ -311,7 +349,7 @@ public class SharePanel : MonoBehaviour
         nextCount = 0;
     }
 
-    public void AddItem(string key, int kind, string title, string sharer, string body, Texture thumb, float aspect)
+    public void AddItem(string key, int kind, string title, string sharer, string body, Texture thumb, float aspect, bool saved)
     {
         if (nextCount >= Capacity || string.IsNullOrEmpty(key)) return;
         nextKey[nextCount] = key;
@@ -321,6 +359,7 @@ public class SharePanel : MonoBehaviour
         nextBody[nextCount] = Clean(body);
         nextThumb[nextCount] = thumb;
         nextAspect[nextCount] = aspect > 0.01f ? aspect : 1f;
+        nextSaved[nextCount] = saved ? 1 : 0;
         nextCount++;
     }
 
@@ -329,7 +368,7 @@ public class SharePanel : MonoBehaviour
         bool changed = nextCount != itemCount;
         for (int i = 0; i < nextCount && !changed; i++)
         {
-            if (nextKey[i] != itemKey[i] || nextTitle[i] != itemTitle[i] || nextThumb[i] != itemThumb[i] || nextBody[i] != itemBody[i] || nextSharer[i] != itemSharer[i]) changed = true;
+            if (nextKey[i] != itemKey[i] || nextTitle[i] != itemTitle[i] || nextThumb[i] != itemThumb[i] || nextBody[i] != itemBody[i] || nextSharer[i] != itemSharer[i] || nextSaved[i] != itemSaved[i]) changed = true;
         }
         string[] k = itemKey; itemKey = nextKey; nextKey = k;
         int[] kd = itemKind; itemKind = nextKind; nextKind = kd;
@@ -338,6 +377,7 @@ public class SharePanel : MonoBehaviour
         string[] b = itemBody; itemBody = nextBody; nextBody = b;
         Texture[] th = itemThumb; itemThumb = nextThumb; nextThumb = th;
         float[] a = itemAspect; itemAspect = nextAspect; nextAspect = a;
+        int[] sv = itemSaved; itemSaved = nextSaved; nextSaved = sv;
         itemCount = nextCount;
 
         // First sight: shares the panel finds on its first look were there before it.
@@ -436,6 +476,11 @@ public class SharePanel : MonoBehaviour
             return;
         }
         if (sourceReady == 0) return;
+        if (action == ActionSaveOrb && itemSaved[item] != 0)
+        {
+            Notice("保存済みです", "Already saved");
+            return;
+        }
         if (action == ActionConnect)
         {
             // Leaving this server is a big step: the first press only asks.
@@ -455,6 +500,7 @@ public class SharePanel : MonoBehaviour
         // A photo moves on the client that controls it, so everyone hears where to put it.
         if (action == ActionBring) SendBring(itemKey[item], position, rotation);
         Queue(action, itemKey[item], position, rotation, 1);
+        if (action == ActionSaveOrb) Notice("メニューの確認で「保存」を押してください", "Press Save in the menu to keep it");
     }
 
     private void Queue(int action, string key, Vector3 position, Quaternion rotation, int local)
@@ -489,18 +535,29 @@ public class SharePanel : MonoBehaviour
         else if (kind == KindServer)
         {
             if (slot == 1) return ActionConnect;
-            if (slot == 2) return ActionCopy;
+            if (slot == 2) return ActionSaveOrb;
+        }
+        else if (kind == KindProp)
+        {
+            if (slot == 1) return ActionSpawn;
+            if (slot == 2) return ActionSaveOrb;
+        }
+        else if (kind == KindWorld || kind == KindAvatar)
+        {
+            if (slot == 1) return ActionSaveOrb;
         }
         return 0;
     }
 
-    private string ActionLabel(int action)
+    private string ActionLabel(int action, int item)
     {
+        if (action == ActionSaveOrb) return itemSaved[item] != 0 ? T("保存済み", "Saved") : T("保存", "Save");
         if (action == ActionBring) return T("手元に", "Bring");
         if (action == ActionCopy) return T("コピー", "Copy");
         if (action == ActionSave) return T("保存", "Save");
         if (action == ActionOpen) return T("開く", "Open");
         if (action == ActionConnect) return T("接続", "Join");
+        if (action == ActionSpawn) return T("取り出す", "Spawn");
         return "";
     }
 
@@ -586,12 +643,12 @@ public class SharePanel : MonoBehaviour
         if (page < 0) page = 0;
 
         string count = japanese == 1 ? itemCount + " 件" : itemCount + (itemCount == 1 ? " item" : " items");
-        if (filter >= 0) count = displayCount + " / " + count;
+        if (filterMask != AllKinds) count = displayCount + " / " + count;
         CountText.text = count;
         PageText.text = pages > 1 ? (page + 1) + " / " + pages : "";
         PrevPageButton.gameObject.SetActive(pages > 1);
         NextPageButton.gameObject.SetActive(pages > 1);
-        for (int i = 0; i < FilterLabels.Length; i++) FilterLabels[i].text = FilterLabel(i);
+        RenderFilters();
 
         for (int r = 0; r < rows; r++)
         {
@@ -602,7 +659,7 @@ public class SharePanel : MonoBehaviour
                 // An empty list says so in its first row.
                 if (r == 0 && displayCount == 0)
                 {
-                    row.ShowMessage(itemCount == 0 ? T("まだ何も共有されていません", "Nothing shared yet") : T("この種類の共有はありません", "Nothing of this kind"));
+                    row.ShowMessage(itemCount == 0 ? T("まだ何も共有されていません", "Nothing shared yet") : T("選んだ種類の共有はありません", "Nothing of the chosen kinds"));
                     continue;
                 }
                 row.Hide();
@@ -611,7 +668,7 @@ public class SharePanel : MonoBehaviour
             int item = display[at];
             int kind = itemKind[item];
             row.Show(KindLabel(kind), KindColor(kind), RowTitle(item), Meta(item), itemThumb[item], itemAspect[item],
-                ActionLabel(ActionFor(kind, 1)), ActionLabel(ActionFor(kind, 2)), ActionLabel(ActionFor(kind, 3)),
+                ActionLabel(ActionFor(kind, 1), item), ActionLabel(ActionFor(kind, 2), item), ActionLabel(ActionFor(kind, 3), item),
                 itemKey[item] == selectedKey);
         }
         RenderPreview();
@@ -777,12 +834,12 @@ public class SharePanel : MonoBehaviour
             int item = Find(order[o]);
             if (item < 0 || used[item] != 0) continue;
             used[item] = 1;
-            if (filter < 0 || itemKind[item] == filter) display[displayCount++] = item;
+            if (Shown(itemKind[item])) display[displayCount++] = item;
         }
         for (int i = 0; i < itemCount; i++)
         {
             if (used[i] != 0) continue;
-            if (filter < 0 || itemKind[i] == filter) display[displayCount++] = i;
+            if (Shown(itemKind[i])) display[displayCount++] = i;
         }
     }
 
@@ -895,7 +952,7 @@ public class SharePanel : MonoBehaviour
         SendViewTo(null);
     }
 
-    // [MsgView, page (2 bytes), preview page (2 bytes), filter + 1, move on, key length, key]
+    // [MsgView, page (2 bytes), preview page (2 bytes), filter bits, move on, key length, key]
     private void SendViewTo(ushort[] to)
     {
         if (net == null || !net.HasNetworkID) return;
@@ -906,7 +963,7 @@ public class SharePanel : MonoBehaviour
         buffer[2] = (byte)((page >> 8) & 0xFF);
         buffer[3] = (byte)(previewPage & 0xFF);
         buffer[4] = (byte)((previewPage >> 8) & 0xFF);
-        buffer[5] = (byte)(filter + 1);
+        buffer[5] = (byte)filterMask;
         buffer[6] = (byte)moveEnabled;
         buffer[7] = (byte)key.Length;
         for (int c = 0; c < key.Length; c++) buffer[8 + c] = (byte)key[c];
@@ -992,7 +1049,7 @@ public class SharePanel : MonoBehaviour
         {
             page = buffer[1] | (buffer[2] << 8);
             previewPage = buffer[3] | (buffer[4] << 8);
-            filter = buffer[5] - 1;
+            filterMask = buffer[5];
             moveEnabled = buffer[6] != 0 ? 1 : 0;
             int length = buffer[7];
             selectedKey = 8 + length <= buffer.Length ? Encoding.ASCII.GetString(buffer, 8, length) : "";

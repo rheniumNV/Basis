@@ -2,7 +2,9 @@ using Basis.BasisUI;
 using Basis.ImagePickup;
 using Basis.Scripts.Common;
 using Basis.Scripts.Networking;
+using Basis.Scripts.UI.UI_Panels;
 using Cilbox;
+using System.Collections;
 using System.Collections.Generic;
 using TMPro;
 using UnityEngine;
@@ -21,7 +23,8 @@ using UnityEngine;
 ///   and an orb's title comes from the TextMeshPro under it.
 /// - No method of a whitelisted type that the whitelist leaves out: that also breaks the prop.
 /// - No typeof(...) (System.Type has no allowed methods); Resources is not whitelisted, so its
-///   generic lookup is fine.
+///   generic lookup is fine. Likewise no List&lt;T&gt; of these types: lists of them are walked as
+///   a plain IEnumerable, and their entries read through JsonUtility rather than their fields.
 /// </summary>
 [Cilboxable]
 public class SharePanelSource : MonoBehaviour
@@ -38,6 +41,12 @@ public class SharePanelSource : MonoBehaviour
     // Photos this client has looked at, to tell the panel who shared a new one.
     private List<string> photosKnown;
     private MaterialPropertyBlock block;
+    // What this player has saved, as JSON text to search in: the library's items and the saved
+    // servers. Read every few seconds.
+    public float SavedRefreshSeconds = 5f;
+    private float nextSavedRefresh;
+    private string libraryJson = "";
+    private string serversJson = "";
 
     private void Start()
     {
@@ -67,6 +76,11 @@ public class SharePanelSource : MonoBehaviour
 
     private void Refresh()
     {
+        if (Time.time >= nextSavedRefresh)
+        {
+            nextSavedRefresh = Time.time + SavedRefreshSeconds;
+            ReadSaved();
+        }
         seen.Clear();
         Panel.BeginItems();
 
@@ -88,7 +102,7 @@ public class SharePanelSource : MonoBehaviour
             float aspect = 1f;
             if (thumb != null) thumbAspect.TryGetValue(key, out aspect);
             string size = thumb != null ? thumb.width + " × " + thumb.height : "";
-            Panel.AddItem(key, SharePanel.KindPhoto, size, "", "", thumb, aspect);
+            Panel.AddItem(key, SharePanel.KindPhoto, size, "", "", thumb, aspect, false);
         }
 
         BasisContentSphere[] spheres = Resources.FindObjectsOfTypeAll<BasisContentSphere>();
@@ -110,6 +124,7 @@ public class SharePanelSource : MonoBehaviour
             string body = "";
             Texture thumb = null;
             float aspect = 1f;
+            bool saved = false;
             if (kind == SharePanel.KindLink || kind == SharePanel.KindText)
             {
                 body = sphere.ContentURL;
@@ -123,15 +138,17 @@ public class SharePanelSource : MonoBehaviour
                 string password;
                 if (!SavedServerStore.TryParseConnectionString(sphere.ContentURL, out address, out port, out portGiven, out password)) continue;
                 title = address + ":" + port;
+                saved = ServerSaved(address, port);
                 if (!string.IsNullOrEmpty(password)) body = Panel.T("パスワード付きのサーバーです（接続時に自動で使われます）", "This server has a password (used automatically when joining)");
             }
             else
             {
                 title = OrbTitle(sphere);
                 thumb = OrbImage(sphere);
+                saved = LibrarySaved(sphere.ContentURL);
                 if (thumb != null) aspect = (float)thumb.width / thumb.height;
             }
-            Panel.AddItem(key, kind, title, sphere.CreatorDisplayName, body, thumb, aspect);
+            Panel.AddItem(key, kind, title, sphere.CreatorDisplayName, body, thumb, aspect, saved);
         }
 
         Panel.EndItems();
@@ -139,6 +156,39 @@ public class SharePanelSource : MonoBehaviour
         // Only now: a refused type fails the first call that uses it and stops this component,
         // so reaching here means the permission was given and the panel's notice can go.
         Panel.SourceReady();
+    }
+
+    // The library (worlds, props, avatars) and the saved servers, each entry turned into JSON.
+    private void ReadSaved()
+    {
+        BasisDataStoreItemKeys.EnsureLoaded();
+        libraryJson = JoinJson(BasisDataStoreItemKeys.DisplayKeys());
+        serversJson = JoinJson(SavedServerStore.Load());
+    }
+
+    private string JoinJson(IEnumerable entries)
+    {
+        if (entries == null) return "";
+        System.Text.StringBuilder text = new System.Text.StringBuilder();
+        foreach (object entry in entries)
+        {
+            if (entry == null) continue;
+            text.Append(JsonUtility.ToJson(entry));
+            text.Append('\n');
+        }
+        return text.ToString();
+    }
+
+    private bool LibrarySaved(string url)
+    {
+        if (string.IsNullOrEmpty(url)) return false;
+        return libraryJson.Contains("\"Url\":\"" + url + "\"");
+    }
+
+    private bool ServerSaved(string address, ushort port)
+    {
+        string lower = serversJson.ToLowerInvariant();
+        return lower.Contains("\"address\":\"" + address.ToLowerInvariant() + "\",\"port\":" + port + ",");
     }
 
     // The orb's label reads "<type>\n<name>" once its bundle's name is known.
@@ -236,19 +286,22 @@ public class SharePanelSource : MonoBehaviour
         bool server = (int)found.ContentType == 3;
         if (action == SharePanel.ActionCopy)
         {
-            string text = found.ContentURL;
-            if (server)
-            {
-                // Just the address: the password was shared to join, not to pass on.
-                string address;
-                ushort port;
-                bool portGiven;
-                string password;
-                if (!SavedServerStore.TryParseConnectionString(text, out address, out port, out portGiven, out password)) return;
-                text = address + ":" + port;
-            }
-            BasisClipboard.Copy(text);
+            BasisClipboard.Copy(found.ContentURL);
             Panel.Notice("コピーしました", "Copied");
+        }
+        else if (action == SharePanel.ActionSpawn && (int)found.ContentType == 1)
+        {
+            // The same request the library makes: the prop loads for everyone, here.
+            SerializableBasis.LocalLoadResource loaded;
+            bool requested = BasisNetworkSpawnItem.RequestGameObjectLoad(found.UnlockPassword, found.ContentURL, position, rotation, Vector3.one, false, false, false, out loaded);
+            if (requested) Panel.Notice("プロップを取り出しています…", "Spawning the prop…");
+            else Panel.Notice("プロップを取り出せませんでした", "Could not spawn the prop");
+        }
+        else if (action == SharePanel.ActionSaveOrb)
+        {
+            // Basis' own dialog for the orb: "Save" puts it in the library or the server list.
+            found.WasPressed();
+            nextSavedRefresh = 0f;
         }
         else if (action == SharePanel.ActionConnect && server)
         {
