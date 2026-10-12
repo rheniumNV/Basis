@@ -59,6 +59,21 @@ public class SharePanelRow : MonoBehaviour
         Content.SetActive(false);
     }
 
+    /// <summary>A line of text in place of an item ("Nothing shared yet").</summary>
+    public void ShowMessage(string message)
+    {
+        Content.SetActive(true);
+        Title.text = message;
+        Meta.text = "";
+        KindText.text = "";
+        SelectedMark.SetActive(false);
+        Thumb.gameObject.SetActive(false);
+        Chip.gameObject.SetActive(false);
+        SetAction(0, "");
+        SetAction(1, "");
+        SetAction(2, "");
+    }
+
     public void Show(string kind, Color kindColor, string title, string meta, Texture thumb, float aspect,
         string action1, string action2, string action3, bool selected)
     {

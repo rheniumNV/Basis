@@ -1,5 +1,7 @@
 using Basis.BasisUI;
 using Basis.ImagePickup;
+using Basis.Scripts.Common;
+using Basis.Scripts.Networking;
 using Cilbox;
 using System.Collections.Generic;
 using TMPro;
@@ -7,7 +9,8 @@ using UnityEngine;
 
 /// <summary>
 /// Reads what is shared on the server for the <see cref="SharePanel"/> and carries out the
-/// actions that need Basis itself: copying to the clipboard, saving a photo, and moving a photo.
+/// actions that need Basis itself: copying to the clipboard, saving a photo, moving a photo and
+/// joining a shared server.
 ///
 /// Every Basis type used here is outside the prop whitelist, so this component is what the
 /// permission prompt is about. If the player refuses, only this component stops and the panel
@@ -32,6 +35,8 @@ public class SharePanelSource : MonoBehaviour
     private Dictionary<string, Texture2D> thumbs;
     private Dictionary<string, float> thumbAspect;
     private List<string> seen;
+    // Photos this client has looked at, to tell the panel who shared a new one.
+    private List<string> photosKnown;
     private MaterialPropertyBlock block;
 
     private void Start()
@@ -39,6 +44,7 @@ public class SharePanelSource : MonoBehaviour
         thumbs = new Dictionary<string, Texture2D>();
         thumbAspect = new Dictionary<string, float>();
         seen = new List<string>();
+        photosKnown = new List<string>();
         block = new MaterialPropertyBlock();
     }
 
@@ -72,6 +78,12 @@ public class SharePanelSource : MonoBehaviour
             // "BasisImagePickup_" + the first 8 hex digits of the image's id: the same on every client.
             string key = "img:" + image.gameObject.name;
             seen.Add(key);
+            if (!photosKnown.Contains(key))
+            {
+                photosKnown.Add(key);
+                // Whoever moves a photo when it first turns up is, for a new photo, whoever shared it.
+                if (image.IsController) Panel.ClaimSharer(key);
+            }
             Texture2D thumb = Thumbnail(key, image);
             float aspect = 1f;
             if (thumb != null) thumbAspect.TryGetValue(key, out aspect);
@@ -89,6 +101,7 @@ public class SharePanelSource : MonoBehaviour
             if (type == 0) kind = SharePanel.KindAvatar;
             else if (type == 1) kind = SharePanel.KindProp;
             else if (type == 2) kind = SharePanel.KindWorld;
+            else if (type == 3) kind = SharePanel.KindServer;
             else if (type == 5) kind = SharePanel.KindLink;
             else if (type == 6) kind = SharePanel.KindText;
 
@@ -100,6 +113,17 @@ public class SharePanelSource : MonoBehaviour
             if (kind == SharePanel.KindLink || kind == SharePanel.KindText)
             {
                 body = sphere.ContentURL;
+            }
+            else if (kind == SharePanel.KindServer)
+            {
+                // "address[:port][#password]": the password stays here, only the address is shown.
+                string address;
+                ushort port;
+                bool portGiven;
+                string password;
+                if (!SavedServerStore.TryParseConnectionString(sphere.ContentURL, out address, out port, out portGiven, out password)) continue;
+                title = address + ":" + port;
+                if (!string.IsNullOrEmpty(password)) body = Panel.T("パスワード付きのサーバーです（接続時に自動で使われます）", "This server has a password (used automatically when joining)");
             }
             else
             {
@@ -206,13 +230,59 @@ public class SharePanelSource : MonoBehaviour
             }
             return;
         }
-        if (key.StartsWith("orb:") && action == SharePanel.ActionCopy)
+        if (!key.StartsWith("orb:")) return;
+        BasisContentSphere found = FindSphere(key.Substring(4));
+        if (found == null) return;
+        bool server = (int)found.ContentType == 3;
+        if (action == SharePanel.ActionCopy)
         {
-            BasisContentSphere sphere = FindSphere(key.Substring(4));
-            if (sphere == null) return;
-            BasisClipboard.Copy(sphere.ContentURL);
+            string text = found.ContentURL;
+            if (server)
+            {
+                // Just the address: the password was shared to join, not to pass on.
+                string address;
+                ushort port;
+                bool portGiven;
+                string password;
+                if (!SavedServerStore.TryParseConnectionString(text, out address, out port, out portGiven, out password)) return;
+                text = address + ":" + port;
+            }
+            BasisClipboard.Copy(text);
             Panel.Notice("コピーしました", "Copied");
         }
+        else if (action == SharePanel.ActionConnect && server)
+        {
+            Join(found.ContentURL);
+        }
+    }
+
+    // The same path as a basisdemo:// invite link: the link builds the server entry, then the
+    // connection service leaves this server and joins that one.
+    private void Join(string connection)
+    {
+        string address;
+        ushort port;
+        bool portGiven;
+        string password;
+        if (!SavedServerStore.TryParseConnectionString(connection, out address, out port, out portGiven, out password))
+        {
+            Panel.Notice("サーバーの情報が読めませんでした", "Could not read the server details");
+            return;
+        }
+        ServerDirectoryEntry entry;
+        if (!BasisDeepLinkProvider.TryParseBasisUrl(BasisDeepLinkProvider.FormatDeepLink(address, port, password), out entry))
+        {
+            Panel.Notice("サーバーの情報が読めませんでした", "Could not read the server details");
+            return;
+        }
+        string userName = BasisDataStore.LoadString(BasisConnectionService.UsernameFileName, "");
+        if (string.IsNullOrEmpty(userName) || userName.Trim().Length == 0)
+        {
+            Panel.Notice("先にメニューのサーバー画面で名前を設定してください", "Set your name in the Servers menu first");
+            return;
+        }
+        Panel.Notice("接続しています…", "Joining…");
+        BasisConnectionService.ConnectAsync(entry, userName, false);
     }
 
     private BasisImagePickupObject FindImage(string name)

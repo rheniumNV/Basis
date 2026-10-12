@@ -1,6 +1,7 @@
 using Basis;
 using Basis.Network.Core;
 using Basis.Scripts.BasisSdk.Interactions;
+using Basis.Scripts.BasisSdk.Players;
 using Basis.Scripts.Drivers;
 using Basis.Scripts.Networking.NetworkedAvatar;
 using Basis.Shims;
@@ -11,15 +12,17 @@ using TMPro;
 using UnityEngine;
 
 /// <summary>
-/// A panel listing what has been shared on the server: photos (image pickups), links, text and
-/// the world / prop / avatar orbs. Everyone sees the same screen: the panel's network owner
-/// decides the order of the list (newest first) and the page and the item shown large are shared.
-/// The buttons on a row act for whoever presses them, so several people can use it at once.
+/// A panel listing what has been shared on the server: photos (image pickups), links, text,
+/// servers and the world / prop / avatar orbs, with who shared each and when. Everyone sees the
+/// same screen: the panel's network owner decides the order of the list (newest first) and when
+/// each share was first seen; the page, the type filter, the item shown large and whether the
+/// panel can be grabbed are shared too. The buttons on a row act for whoever presses them, so
+/// several people can use it at once. The language is each player's own.
 ///
 /// This script uses only what a prop may use without asking. Reading the shares and the actions
-/// that need Basis itself (copy, save, bringing a photo over) live in <see cref="SharePanelSource"/>,
-/// which needs the player's permission; it pushes the items in and pulls the requests out, so a
-/// refused source leaves this script running with a notice on the panel.
+/// that need Basis itself (copy, save, moving a photo, joining a server) live in
+/// <see cref="SharePanelSource"/>, which needs the player's permission; it pushes the items in and
+/// pulls the requests out, so a refused source leaves this script running with a notice.
 /// </summary>
 [Cilboxable]
 public class SharePanel : MonoBehaviour
@@ -31,17 +34,23 @@ public class SharePanel : MonoBehaviour
     public const int KindProp = 4;
     public const int KindAvatar = 5;
     public const int KindOther = 6;
+    public const int KindServer = 7;
 
     public const int ActionBring = 1;
     public const int ActionCopy = 2;
     public const int ActionSave = 3;
     public const int ActionOpen = 4;
+    public const int ActionConnect = 5;
 
     private const byte MsgOrder = 1;
     private const byte MsgView = 2;
     private const byte MsgBring = 3;
+    private const byte MsgSharer = 4;
     private const int Capacity = 64;
     private const int RequestCapacity = 16;
+    // Shares already there when the panel first looks have no known time.
+    private const float FirstLookSeconds = 3f;
+    private const float ConfirmSeconds = 6f;
 
     public SharePanelRow[] Rows;
     public TextMeshPro TitleText;
@@ -50,6 +59,18 @@ public class SharePanel : MonoBehaviour
     public TextMeshPro StatusText;
     public BasisInteractableButton PrevPageButton;
     public BasisInteractableButton NextPageButton;
+
+    // Filter buttons, in the order of FilterKinds (-1 = everything).
+    public BasisInteractableButton[] FilterButtons;
+    public TextMeshPro[] FilterLabels;
+    public int[] FilterKinds;
+
+    public BasisInteractableButton LanguageJaButton;
+    public BasisInteractableButton LanguageEnButton;
+    public BasisInteractableButton MoveButton;
+    public TextMeshPro MoveLabel;
+    // The board's own collider: the pickup grabs by it, so turning it off stops moving.
+    public Collider GrabCollider;
 
     public TextMeshPro PreviewTitle;
     public TextMeshPro PreviewMeta;
@@ -72,6 +93,8 @@ public class SharePanel : MonoBehaviour
     private int japanese;
     private int sourceReady;
     private float noticeUntil;
+    private float startedAt;
+    private float nextClockRender;
 
     // Items as this client sees them, rebuilt by the source each refresh.
     private string[] itemKey;
@@ -92,16 +115,27 @@ public class SharePanel : MonoBehaviour
     private float[] nextAspect;
     private int nextCount;
 
-    // Shared view: the order of the list (from the owner), the page and the item shown large.
+    // When each share was first seen (UTC ticks, 0 = before the panel was there) and who shared
+    // the photos; the owner's values win and travel with the order.
+    private Dictionary<string, long> seenAt;
+    private Dictionary<string, string> sharerOf;
+
+    // Shared view.
     private List<string> order;
     private int page;
+    private int filter;
     private string selectedKey;
     private int previewPage;
-    // Indices into the item arrays, in display order.
+    private int moveEnabled;
+    // Indices into the item arrays, in display order (after the filter).
     private int[] display;
     private int displayCount;
     private string[] previewPages;
     private int previewPageCount;
+
+    // Joining a server takes a second press.
+    private string confirmKey;
+    private float confirmUntil;
 
     // Requests for the source: an action, an item key and, for bringing a photo, where to.
     private int[] requestAction;
@@ -129,8 +163,13 @@ public class SharePanel : MonoBehaviour
         nextThumb = new Texture[Capacity];
         nextAspect = new float[Capacity];
         display = new int[Capacity];
+        seenAt = new Dictionary<string, long>();
+        sharerOf = new Dictionary<string, string>();
         order = new List<string>();
         selectedKey = "";
+        confirmKey = "";
+        filter = -1;
+        moveEnabled = 1;
         previewPages = new string[1];
         previewPages[0] = "";
         previewPageCount = 1;
@@ -139,6 +178,7 @@ public class SharePanel : MonoBehaviour
         requestPosition = new Vector3[RequestCapacity];
         requestRotation = new Quaternion[RequestCapacity];
         requestLocal = new int[RequestCapacity];
+        startedAt = Time.time;
 
         japanese = Application.systemLanguage == SystemLanguage.Japanese ? 1 : 0;
 
@@ -146,6 +186,17 @@ public class SharePanel : MonoBehaviour
         NextPageButton.ButtonDown = OnNextPage;
         PreviewPrevButton.ButtonDown = OnPreviewPrev;
         PreviewNextButton.ButtonDown = OnPreviewNext;
+        LanguageJaButton.ButtonDown = OnLanguageJa;
+        LanguageEnButton.ButtonDown = OnLanguageEn;
+        MoveButton.ButtonDown = OnMoveToggle;
+        FilterButtons[0].ButtonDown = OnFilter0;
+        FilterButtons[1].ButtonDown = OnFilter1;
+        FilterButtons[2].ButtonDown = OnFilter2;
+        FilterButtons[3].ButtonDown = OnFilter3;
+        FilterButtons[4].ButtonDown = OnFilter4;
+        FilterButtons[5].ButtonDown = OnFilter5;
+        FilterButtons[6].ButtonDown = OnFilter6;
+        FilterButtons[7].ButtonDown = OnFilter7;
 
         net = SafeUtil.MakeNetworkable(this);
         if (net != null)
@@ -154,10 +205,8 @@ public class SharePanel : MonoBehaviour
             net.PlayerJoined += OnPlayerJoined;
         }
 
-        if (TitleText != null) TitleText.text = T("みんなの共有", "Shared here");
-        // Until the source reports in, the panel can only say it needs permission.
-        if (sourceReady == 0) StatusText.text = T("共有物を読むには、このプロップのスクリプトを許可してください", "Allow this prop's scripts to list what is shared");
-        Render();
+        ApplyMove();
+        ApplyLanguage();
     }
 
     private void Update()
@@ -165,13 +214,86 @@ public class SharePanel : MonoBehaviour
         if (noticeUntil > 0f && Time.time > noticeUntil)
         {
             noticeUntil = 0f;
-            StatusText.text = "";
+            StatusText.text = sourceReady == 0 ? PermissionNotice() : "";
+        }
+        // "3 min ago" moves on by itself.
+        if (Time.time > nextClockRender)
+        {
+            nextClockRender = Time.time + 20f;
+            Render();
         }
     }
 
-    private string T(string ja, string en)
+    /// <summary>Japanese or English text, by this player's choice.</summary>
+    public string T(string ja, string en)
     {
         return japanese == 1 ? ja : en;
+    }
+
+    private string PermissionNotice()
+    {
+        return T("共有物を読むには、このプロップのスクリプトを許可してください", "Allow this prop's scripts to list what is shared");
+    }
+
+    // ---- Language and moving ----
+
+    private void OnLanguageJa()
+    {
+        japanese = 1;
+        ApplyLanguage();
+    }
+
+    private void OnLanguageEn()
+    {
+        japanese = 0;
+        ApplyLanguage();
+    }
+
+    private void ApplyLanguage()
+    {
+        TitleText.text = T("みんなの共有", "Shared here");
+        if (noticeUntil == 0f) StatusText.text = sourceReady == 0 ? PermissionNotice() : "";
+        ApplyMove();
+        Render();
+    }
+
+    private void OnMoveToggle()
+    {
+        moveEnabled = moveEnabled == 1 ? 0 : 1;
+        ApplyMove();
+        SendView();
+    }
+
+    private void ApplyMove()
+    {
+        GrabCollider.enabled = moveEnabled == 1;
+        MoveLabel.text = moveEnabled == 1 ? T("移動：オン", "Move: on") : T("移動：オフ", "Move: off");
+    }
+
+    // ---- Filter ----
+
+    private void OnFilter0() { SetFilter(0); }
+    private void OnFilter1() { SetFilter(1); }
+    private void OnFilter2() { SetFilter(2); }
+    private void OnFilter3() { SetFilter(3); }
+    private void OnFilter4() { SetFilter(4); }
+    private void OnFilter5() { SetFilter(5); }
+    private void OnFilter6() { SetFilter(6); }
+    private void OnFilter7() { SetFilter(7); }
+
+    private void SetFilter(int button)
+    {
+        filter = FilterKinds[button];
+        page = 0;
+        SendView();
+        Render();
+    }
+
+    private string FilterLabel(int button)
+    {
+        int kind = FilterKinds[button];
+        string label = kind < 0 ? T("すべて", "All") : KindLabel(kind);
+        return kind == filter ? "<b><u>" + label + "</u></b>" : label;
     }
 
     // ---- Called by the source (permission-gated) ----
@@ -179,8 +301,9 @@ public class SharePanel : MonoBehaviour
     /// <summary>The source is running: the permission notice goes.</summary>
     public void SourceReady()
     {
+        if (sourceReady == 1) return;
         sourceReady = 1;
-        if (StatusText != null && noticeUntil == 0f) StatusText.text = "";
+        if (noticeUntil == 0f) StatusText.text = "";
     }
 
     public void BeginItems()
@@ -206,7 +329,7 @@ public class SharePanel : MonoBehaviour
         bool changed = nextCount != itemCount;
         for (int i = 0; i < nextCount && !changed; i++)
         {
-            if (nextKey[i] != itemKey[i] || nextTitle[i] != itemTitle[i] || nextThumb[i] != itemThumb[i] || nextBody[i] != itemBody[i]) changed = true;
+            if (nextKey[i] != itemKey[i] || nextTitle[i] != itemTitle[i] || nextThumb[i] != itemThumb[i] || nextBody[i] != itemBody[i] || nextSharer[i] != itemSharer[i]) changed = true;
         }
         string[] k = itemKey; itemKey = nextKey; nextKey = k;
         int[] kd = itemKind; itemKind = nextKind; nextKind = kd;
@@ -217,8 +340,34 @@ public class SharePanel : MonoBehaviour
         float[] a = itemAspect; itemAspect = nextAspect; nextAspect = a;
         itemCount = nextCount;
 
-        if (IsAuthority() && UpdateOrder()) SendOrder(null);
+        // First sight: shares the panel finds on its first look were there before it.
+        bool firstLook = Time.time - startedAt < FirstLookSeconds;
+        for (int i = 0; i < itemCount; i++)
+        {
+            if (seenAt.ContainsKey(itemKey[i])) continue;
+            seenAt[itemKey[i]] = firstLook ? 0L : System.DateTime.UtcNow.Ticks;
+        }
+
+        if (IsAuthority() && UpdateOrder())
+        {
+            SendOrder(null);
+            changed = true;
+        }
         if (changed) Render();
+    }
+
+    /// <summary>
+    /// The source saw a photo for the first time while this client moves it — which, right after a
+    /// photo is shared, means this player shared it. Everyone is told the name.
+    /// </summary>
+    public void ClaimSharer(string key)
+    {
+        if (sharerOf.ContainsKey(key)) return;
+        string name = LocalName();
+        if (name.Length == 0) return;
+        sharerOf[key] = name;
+        SendSharer(key, name);
+        Render();
     }
 
     public int RequestCount()
@@ -260,7 +409,7 @@ public class SharePanel : MonoBehaviour
     public void Notice(string ja, string en)
     {
         StatusText.text = T(ja, en);
-        noticeUntil = Time.time + 2.5f;
+        noticeUntil = Time.time + 3f;
     }
 
     // ---- Rows ----
@@ -287,6 +436,19 @@ public class SharePanel : MonoBehaviour
             return;
         }
         if (sourceReady == 0) return;
+        if (action == ActionConnect)
+        {
+            // Leaving this server is a big step: the first press only asks.
+            if (confirmKey != itemKey[item] || Time.time > confirmUntil)
+            {
+                confirmKey = itemKey[item];
+                confirmUntil = Time.time + ConfirmSeconds;
+                StatusText.text = T("もう一度「接続」を押すと " + itemTitle[item] + " に移動します", "Press Join again to move to " + itemTitle[item]);
+                noticeUntil = confirmUntil;
+                return;
+            }
+            confirmKey = "";
+        }
         Vector3 position;
         Quaternion rotation;
         BringPose(out position, out rotation);
@@ -324,6 +486,11 @@ public class SharePanel : MonoBehaviour
         {
             if (slot == 1) return ActionCopy;
         }
+        else if (kind == KindServer)
+        {
+            if (slot == 1) return ActionConnect;
+            if (slot == 2) return ActionCopy;
+        }
         return 0;
     }
 
@@ -333,6 +500,7 @@ public class SharePanel : MonoBehaviour
         if (action == ActionCopy) return T("コピー", "Copy");
         if (action == ActionSave) return T("保存", "Save");
         if (action == ActionOpen) return T("開く", "Open");
+        if (action == ActionConnect) return T("接続", "Join");
         return "";
     }
 
@@ -344,6 +512,7 @@ public class SharePanel : MonoBehaviour
         if (kind == KindWorld) return T("ワールド", "World");
         if (kind == KindProp) return T("プロップ", "Prop");
         if (kind == KindAvatar) return T("アバター", "Avatar");
+        if (kind == KindServer) return T("サーバー", "Server");
         return T("その他", "Other");
     }
 
@@ -361,6 +530,14 @@ public class SharePanel : MonoBehaviour
         forward.Normalize();
         position = head.position + forward * BringDistance;
         rotation = Quaternion.LookRotation(forward, Vector3.up);
+    }
+
+    private string LocalName()
+    {
+        IBasisPlayer player = BasisPlayersShim.Local;
+        if (player == null) return "";
+        string name = player.DisplayName;
+        return name == null ? "" : name;
     }
 
     // ---- Paging ----
@@ -401,16 +578,20 @@ public class SharePanel : MonoBehaviour
 
     private void Render()
     {
+        if (itemKey == null) return;
         BuildDisplay();
         int rows = Rows.Length;
         int pages = displayCount == 0 ? 1 : (displayCount + rows - 1) / rows;
         if (page >= pages) page = pages - 1;
         if (page < 0) page = 0;
 
-        CountText.text = displayCount == 0 ? T("まだ何も共有されていません", "Nothing shared yet") : (japanese == 1 ? displayCount + " 件" : displayCount + (displayCount == 1 ? " item" : " items"));
+        string count = japanese == 1 ? itemCount + " 件" : itemCount + (itemCount == 1 ? " item" : " items");
+        if (filter >= 0) count = displayCount + " / " + count;
+        CountText.text = count;
         PageText.text = pages > 1 ? (page + 1) + " / " + pages : "";
         PrevPageButton.gameObject.SetActive(pages > 1);
         NextPageButton.gameObject.SetActive(pages > 1);
+        for (int i = 0; i < FilterLabels.Length; i++) FilterLabels[i].text = FilterLabel(i);
 
         for (int r = 0; r < rows; r++)
         {
@@ -418,13 +599,18 @@ public class SharePanel : MonoBehaviour
             int at = page * rows + r;
             if (at >= displayCount)
             {
+                // An empty list says so in its first row.
+                if (r == 0 && displayCount == 0)
+                {
+                    row.ShowMessage(itemCount == 0 ? T("まだ何も共有されていません", "Nothing shared yet") : T("この種類の共有はありません", "Nothing of this kind"));
+                    continue;
+                }
                 row.Hide();
                 continue;
             }
             int item = display[at];
             int kind = itemKind[item];
-            string meta = itemSharer[item].Length > 0 ? KindLabel(kind) + "・" + itemSharer[item] : KindLabel(kind);
-            row.Show(KindLabel(kind), KindColor(kind), RowTitle(item), meta, itemThumb[item], itemAspect[item],
+            row.Show(KindLabel(kind), KindColor(kind), RowTitle(item), Meta(item), itemThumb[item], itemAspect[item],
                 ActionLabel(ActionFor(kind, 1)), ActionLabel(ActionFor(kind, 2)), ActionLabel(ActionFor(kind, 3)),
                 itemKey[item] == selectedKey);
         }
@@ -433,13 +619,47 @@ public class SharePanel : MonoBehaviour
         PreviewNextButton.gameObject.SetActive(previewPageCount > 1);
     }
 
+    // "Photo・Alice・3 min ago"
+    private string Meta(int item)
+    {
+        string meta = KindLabel(itemKind[item]);
+        string sharer = Sharer(item);
+        if (sharer.Length > 0) meta += "・" + sharer;
+        string when = When(itemKey[item]);
+        if (when.Length > 0) meta += "・" + when;
+        return meta;
+    }
+
+    private string Sharer(int item)
+    {
+        if (itemSharer[item].Length > 0) return itemSharer[item];
+        string name;
+        if (sharerOf.TryGetValue(itemKey[item], out name)) return name;
+        return "";
+    }
+
+    private string When(string key)
+    {
+        long ticks;
+        if (!seenAt.TryGetValue(key, out ticks) || ticks == 0L) return "";
+        System.DateTime at = new System.DateTime(ticks, System.DateTimeKind.Utc);
+        double minutes = (System.DateTime.UtcNow - at).TotalMinutes;
+        if (minutes < 1.0) return T("たった今", "just now");
+        if (minutes < 60.0)
+        {
+            int m = (int)minutes;
+            return japanese == 1 ? m + "分前" : m + (m == 1 ? " min ago" : " mins ago");
+        }
+        return at.ToLocalTime().ToString("HH:mm");
+    }
+
     private string RowTitle(int item)
     {
         string title = itemTitle[item];
         if (title.Length == 0) title = itemBody[item];
         if (title.Length == 0) title = KindLabel(itemKind[item]);
         title = title.Replace('\n', ' ');
-        if (title.Length > 60) title = title.Substring(0, 60) + "…";
+        if (title.Length > 80) title = title.Substring(0, 80) + "…";
         return title;
     }
 
@@ -464,7 +684,7 @@ public class SharePanel : MonoBehaviour
         }
         int kind = itemKind[item];
         PreviewTitle.text = itemTitle[item].Length > 0 ? itemTitle[item] : KindLabel(kind);
-        PreviewMeta.text = itemSharer[item].Length > 0 ? KindLabel(kind) + "・" + itemSharer[item] : KindLabel(kind);
+        PreviewMeta.text = Meta(item);
 
         Texture thumb = itemThumb[item];
         bool showImage = thumb != null && (kind == KindPhoto || kind == KindWorld || kind == KindProp || kind == KindAvatar);
@@ -500,13 +720,15 @@ public class SharePanel : MonoBehaviour
         else
         {
             SetPreviewPages("");
-            PreviewBody.text = showImage ? "" : (kind == KindPhoto ? T("読み込み中…", "Loading…") : Verbatim(itemBody[item]));
+            if (showImage) PreviewBody.text = "";
+            else if (kind == KindPhoto) PreviewBody.text = T("読み込み中…", "Loading…");
+            else PreviewBody.text = Verbatim(itemBody[item]);
             PreviewPageText.text = "";
         }
     }
 
     // Splits text into pages that fit the preview box, by an estimate of wrapped lines
-    // (full-width characters count as one unit, narrower ones as half).
+    // (full-width characters count as one unit, narrower ones as about half).
     private void SetPreviewPages(string text)
     {
         List<string> pages = new List<string>();
@@ -545,7 +767,7 @@ public class SharePanel : MonoBehaviour
     }
 
     // The list order: the owner's order first, then anything this client has that the owner's
-    // order does not have yet.
+    // order does not have yet; then the type filter.
     private void BuildDisplay()
     {
         displayCount = 0;
@@ -555,12 +777,12 @@ public class SharePanel : MonoBehaviour
             int item = Find(order[o]);
             if (item < 0 || used[item] != 0) continue;
             used[item] = 1;
-            display[displayCount++] = item;
+            if (filter < 0 || itemKind[item] == filter) display[displayCount++] = item;
         }
         for (int i = 0; i < itemCount; i++)
         {
             if (used[i] != 0) continue;
-            display[displayCount++] = i;
+            if (filter < 0 || itemKind[i] == filter) display[displayCount++] = i;
         }
     }
 
@@ -630,12 +852,15 @@ public class SharePanel : MonoBehaviour
         return net == null || !net.HasNetworkID || net.IsOwnedLocallyOnServer;
     }
 
+    // [MsgOrder, count (2 bytes), then per share: key length, key (ASCII), first seen (UTC
+    //  ticks, 8 bytes, 0 = unknown), sharer length, sharer (UTF-8, photos only)]
     private void SendOrder(ushort[] to)
     {
         if (net == null || !net.HasNetworkID) return;
+        // (No byte[][] here: an array of arrays is a type the prop whitelist does not cover.)
         int count = order.Count;
         int size = 3;
-        for (int i = 0; i < count; i++) size += 1 + order[i].Length;
+        for (int i = 0; i < count; i++) size += 1 + order[i].Length + 8 + 1 + SharerBytes(order[i]).Length;
         byte[] buffer = new byte[size];
         buffer[0] = MsgOrder;
         buffer[1] = (byte)(count & 0xFF);
@@ -646,8 +871,23 @@ public class SharePanel : MonoBehaviour
             string key = order[i];
             buffer[at++] = (byte)key.Length;
             for (int c = 0; c < key.Length; c++) buffer[at++] = (byte)key[c];
+            long ticks;
+            if (!seenAt.TryGetValue(key, out ticks)) ticks = 0L;
+            byte[] t = System.BitConverter.GetBytes(ticks);
+            for (int c = 0; c < 8; c++) buffer[at++] = t[c];
+            byte[] name = SharerBytes(key);
+            buffer[at++] = (byte)name.Length;
+            for (int c = 0; c < name.Length; c++) buffer[at++] = name[c];
         }
         net.SendCustomNetworkEvent(buffer, DeliveryMethod.ReliableOrdered, to);
+    }
+
+    private byte[] SharerBytes(string key)
+    {
+        string name;
+        if (!sharerOf.TryGetValue(key, out name)) return new byte[0];
+        byte[] bytes = Encoding.UTF8.GetBytes(name);
+        return bytes.Length > 255 ? new byte[0] : bytes;
     }
 
     private void SendView()
@@ -655,18 +895,21 @@ public class SharePanel : MonoBehaviour
         SendViewTo(null);
     }
 
+    // [MsgView, page (2 bytes), preview page (2 bytes), filter + 1, move on, key length, key]
     private void SendViewTo(ushort[] to)
     {
         if (net == null || !net.HasNetworkID) return;
         string key = selectedKey == null ? "" : selectedKey;
-        byte[] buffer = new byte[6 + key.Length];
+        byte[] buffer = new byte[8 + key.Length];
         buffer[0] = MsgView;
         buffer[1] = (byte)(page & 0xFF);
         buffer[2] = (byte)((page >> 8) & 0xFF);
         buffer[3] = (byte)(previewPage & 0xFF);
         buffer[4] = (byte)((previewPage >> 8) & 0xFF);
-        buffer[5] = (byte)key.Length;
-        for (int c = 0; c < key.Length; c++) buffer[6 + c] = (byte)key[c];
+        buffer[5] = (byte)(filter + 1);
+        buffer[6] = (byte)moveEnabled;
+        buffer[7] = (byte)key.Length;
+        for (int c = 0; c < key.Length; c++) buffer[8 + c] = (byte)key[c];
         net.SendCustomNetworkEvent(buffer, DeliveryMethod.ReliableOrdered, to);
     }
 
@@ -685,6 +928,21 @@ public class SharePanel : MonoBehaviour
         PutFloat(buffer, 25, rotation.w);
         buffer[29] = (byte)key.Length;
         for (int c = 0; c < key.Length; c++) buffer[30 + c] = (byte)key[c];
+        net.SendCustomNetworkEvent(buffer, DeliveryMethod.ReliableOrdered, null);
+    }
+
+    // [MsgSharer, key length, key, name length, name (UTF-8)]
+    private void SendSharer(string key, string name)
+    {
+        if (net == null || !net.HasNetworkID) return;
+        byte[] bytes = Encoding.UTF8.GetBytes(name);
+        if (bytes.Length > 255) return;
+        byte[] buffer = new byte[3 + key.Length + bytes.Length];
+        buffer[0] = MsgSharer;
+        buffer[1] = (byte)key.Length;
+        for (int c = 0; c < key.Length; c++) buffer[2 + c] = (byte)key[c];
+        buffer[2 + key.Length] = (byte)bytes.Length;
+        for (int c = 0; c < bytes.Length; c++) buffer[3 + key.Length + c] = bytes[c];
         net.SendCustomNetworkEvent(buffer, DeliveryMethod.ReliableOrdered, null);
     }
 
@@ -716,19 +974,29 @@ public class SharePanel : MonoBehaviour
             for (int i = 0; i < count && at < buffer.Length; i++)
             {
                 int length = buffer[at++];
-                if (at + length > buffer.Length) break;
-                next.Add(Encoding.ASCII.GetString(buffer, at, length));
+                if (at + length + 9 > buffer.Length) break;
+                string key = Encoding.ASCII.GetString(buffer, at, length);
                 at += length;
+                seenAt[key] = System.BitConverter.ToInt64(buffer, at);
+                at += 8;
+                int nameLength = buffer[at++];
+                if (at + nameLength > buffer.Length) break;
+                if (nameLength > 0) sharerOf[key] = Encoding.UTF8.GetString(buffer, at, nameLength);
+                at += nameLength;
+                next.Add(key);
             }
             order = next;
             Render();
         }
-        else if (buffer[0] == MsgView && buffer.Length >= 6)
+        else if (buffer[0] == MsgView && buffer.Length >= 8)
         {
             page = buffer[1] | (buffer[2] << 8);
             previewPage = buffer[3] | (buffer[4] << 8);
-            int length = buffer[5];
-            selectedKey = 6 + length <= buffer.Length ? Encoding.ASCII.GetString(buffer, 6, length) : "";
+            filter = buffer[5] - 1;
+            moveEnabled = buffer[6] != 0 ? 1 : 0;
+            int length = buffer[7];
+            selectedKey = 8 + length <= buffer.Length ? Encoding.ASCII.GetString(buffer, 8, length) : "";
+            ApplyMove();
             Render();
         }
         else if (buffer[0] == MsgBring && buffer.Length >= 30)
@@ -738,6 +1006,16 @@ public class SharePanel : MonoBehaviour
             Vector3 position = new Vector3(System.BitConverter.ToSingle(buffer, 1), System.BitConverter.ToSingle(buffer, 5), System.BitConverter.ToSingle(buffer, 9));
             Quaternion rotation = new Quaternion(System.BitConverter.ToSingle(buffer, 13), System.BitConverter.ToSingle(buffer, 17), System.BitConverter.ToSingle(buffer, 21), System.BitConverter.ToSingle(buffer, 25));
             Queue(ActionBring, Encoding.ASCII.GetString(buffer, 30, length), position, rotation, 0);
+        }
+        else if (buffer[0] == MsgSharer && buffer.Length >= 3)
+        {
+            int length = buffer[1];
+            if (2 + length >= buffer.Length) return;
+            string key = Encoding.ASCII.GetString(buffer, 2, length);
+            int nameLength = buffer[2 + length];
+            if (3 + length + nameLength > buffer.Length) return;
+            sharerOf[key] = Encoding.UTF8.GetString(buffer, 3 + length, nameLength);
+            Render();
         }
     }
 }
