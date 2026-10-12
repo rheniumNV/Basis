@@ -35,6 +35,7 @@ public class SharePanel : MonoBehaviour
     public const int KindAvatar = 5;
     public const int KindOther = 6;
     public const int KindServer = 7;
+    public const int KindFolder = 8;
 
     public const int ActionBring = 1;
     public const int ActionCopy = 2;
@@ -45,6 +46,8 @@ public class SharePanel : MonoBehaviour
     public const int ActionSaveOrb = 6;
     // Spawning a shared prop in front of whoever pressed it.
     public const int ActionSpawn = 7;
+    // Removing a share for everyone (where Basis lets this player).
+    public const int ActionDelete = 8;
 
     private const byte MsgOrder = 1;
     private const byte MsgView = 2;
@@ -55,8 +58,8 @@ public class SharePanel : MonoBehaviour
     // Shares already there when the panel first looks have no known time.
     private const float FirstLookSeconds = 3f;
     private const float ConfirmSeconds = 6f;
-    // Filter bits by kind; "other" shares (folders, dolly tracks) show only with every filter on.
-    private const int AllKinds = (1 << KindPhoto) | (1 << KindLink) | (1 << KindText) | (1 << KindWorld) | (1 << KindProp) | (1 << KindAvatar) | (1 << KindServer);
+    // Filter bits by kind; "other" shares (dolly tracks) show only with every filter on.
+    private const int AllKinds = (1 << KindPhoto) | (1 << KindLink) | (1 << KindText) | (1 << KindWorld) | (1 << KindProp) | (1 << KindAvatar) | (1 << KindServer) | (1 << KindFolder);
 
     public SharePanelRow[] Rows;
     public TextMeshPro TitleText;
@@ -89,6 +92,8 @@ public class SharePanel : MonoBehaviour
     public TextMeshPro PreviewPageText;
     public BasisInteractableButton PreviewPrevButton;
     public BasisInteractableButton PreviewNextButton;
+    public BasisInteractableButton DeleteButton;
+    public TextMeshPro DeleteLabel;
     public MeshRenderer PreviewImage;
     public float PreviewImageWidth = 0.5f;
     public float PreviewImageHeight = 0.36f;
@@ -116,6 +121,7 @@ public class SharePanel : MonoBehaviour
     private Texture[] itemThumb;
     private float[] itemAspect;
     private int[] itemSaved;
+    private int[] itemRemovable;
     private int itemCount;
     // Staging for the refresh in progress.
     private string[] nextKey;
@@ -126,6 +132,7 @@ public class SharePanel : MonoBehaviour
     private Texture[] nextThumb;
     private float[] nextAspect;
     private int[] nextSaved;
+    private int[] nextRemovable;
     private int nextCount;
 
     // When each share was first seen (UTC ticks, 0 = before the panel was there) and who shared
@@ -146,9 +153,11 @@ public class SharePanel : MonoBehaviour
     private string[] previewPages;
     private int previewPageCount;
 
-    // Joining a server takes a second press.
+    // Joining a server and deleting take a second press.
     private string confirmKey;
     private float confirmUntil;
+    private string deleteKey;
+    private float deleteUntil;
 
     // Requests for the source: an action, an item key and, for bringing a photo, where to.
     private int[] requestAction;
@@ -169,6 +178,7 @@ public class SharePanel : MonoBehaviour
         itemThumb = new Texture[Capacity];
         itemAspect = new float[Capacity];
         itemSaved = new int[Capacity];
+        itemRemovable = new int[Capacity];
         nextKey = new string[Capacity];
         nextKind = new int[Capacity];
         nextTitle = new string[Capacity];
@@ -177,12 +187,14 @@ public class SharePanel : MonoBehaviour
         nextThumb = new Texture[Capacity];
         nextAspect = new float[Capacity];
         nextSaved = new int[Capacity];
+        nextRemovable = new int[Capacity];
         display = new int[Capacity];
         seenAt = new Dictionary<string, long>();
         sharerOf = new Dictionary<string, string>();
         order = new List<string>();
         selectedKey = "";
         confirmKey = "";
+        deleteKey = "";
         filterMask = AllKinds;
         // Fixed in place until someone turns moving on, so a press never drags the board.
         moveEnabled = 0;
@@ -202,6 +214,7 @@ public class SharePanel : MonoBehaviour
         NextPageButton.ButtonDown = OnNextPage;
         PreviewPrevButton.ButtonDown = OnPreviewPrev;
         PreviewNextButton.ButtonDown = OnPreviewNext;
+        DeleteButton.ButtonDown = OnDelete;
         LanguageJaButton.ButtonDown = OnLanguageJa;
         LanguageEnButton.ButtonDown = OnLanguageEn;
         MoveButton.ButtonDown = OnMoveToggle;
@@ -213,6 +226,7 @@ public class SharePanel : MonoBehaviour
         FilterButtons[5].ButtonDown = OnFilter5;
         FilterButtons[6].ButtonDown = OnFilter6;
         FilterButtons[7].ButtonDown = OnFilter7;
+        FilterButtons[8].ButtonDown = OnFilter8;
 
         net = SafeUtil.MakeNetworkable(this);
         if (net != null)
@@ -296,6 +310,7 @@ public class SharePanel : MonoBehaviour
     private void OnFilter5() { SetFilter(5); }
     private void OnFilter6() { SetFilter(6); }
     private void OnFilter7() { SetFilter(7); }
+    private void OnFilter8() { SetFilter(8); }
 
     private void SetFilter(int button)
     {
@@ -349,7 +364,7 @@ public class SharePanel : MonoBehaviour
         nextCount = 0;
     }
 
-    public void AddItem(string key, int kind, string title, string sharer, string body, Texture thumb, float aspect, bool saved)
+    public void AddItem(string key, int kind, string title, string sharer, string body, Texture thumb, float aspect, bool saved, bool removable)
     {
         if (nextCount >= Capacity || string.IsNullOrEmpty(key)) return;
         nextKey[nextCount] = key;
@@ -360,6 +375,7 @@ public class SharePanel : MonoBehaviour
         nextThumb[nextCount] = thumb;
         nextAspect[nextCount] = aspect > 0.01f ? aspect : 1f;
         nextSaved[nextCount] = saved ? 1 : 0;
+        nextRemovable[nextCount] = removable ? 1 : 0;
         nextCount++;
     }
 
@@ -368,7 +384,7 @@ public class SharePanel : MonoBehaviour
         bool changed = nextCount != itemCount;
         for (int i = 0; i < nextCount && !changed; i++)
         {
-            if (nextKey[i] != itemKey[i] || nextTitle[i] != itemTitle[i] || nextThumb[i] != itemThumb[i] || nextBody[i] != itemBody[i] || nextSharer[i] != itemSharer[i] || nextSaved[i] != itemSaved[i]) changed = true;
+            if (nextKey[i] != itemKey[i] || nextTitle[i] != itemTitle[i] || nextThumb[i] != itemThumb[i] || nextBody[i] != itemBody[i] || nextSharer[i] != itemSharer[i] || nextSaved[i] != itemSaved[i] || nextRemovable[i] != itemRemovable[i]) changed = true;
         }
         string[] k = itemKey; itemKey = nextKey; nextKey = k;
         int[] kd = itemKind; itemKind = nextKind; nextKind = kd;
@@ -378,6 +394,7 @@ public class SharePanel : MonoBehaviour
         Texture[] th = itemThumb; itemThumb = nextThumb; nextThumb = th;
         float[] a = itemAspect; itemAspect = nextAspect; nextAspect = a;
         int[] sv = itemSaved; itemSaved = nextSaved; nextSaved = sv;
+        int[] rm = itemRemovable; itemRemovable = nextRemovable; nextRemovable = rm;
         itemCount = nextCount;
 
         // First sight: shares the panel finds on its first look were there before it.
@@ -503,6 +520,26 @@ public class SharePanel : MonoBehaviour
         if (action == ActionSaveOrb) Notice("メニューの確認で「保存」を押してください", "Press Save in the menu to keep it");
     }
 
+    // The large view's delete button: removes the share shown there, for everyone. The first
+    // press only asks.
+    private void OnDelete()
+    {
+        int item = Find(selectedKey);
+        if (item < 0 || itemRemovable[item] == 0 || sourceReady == 0) return;
+        if (deleteKey != selectedKey || Time.time > deleteUntil)
+        {
+            deleteKey = selectedKey;
+            deleteUntil = Time.time + ConfirmSeconds;
+            DeleteLabel.text = T("本当に削除", "Really delete");
+            StatusText.text = T("もう一度「削除」を押すと、全員の前から消えます", "Press Delete again to remove it for everyone");
+            noticeUntil = deleteUntil;
+            return;
+        }
+        deleteKey = "";
+        DeleteLabel.text = T("削除", "Delete");
+        Queue(ActionDelete, selectedKey, Vector3.zero, Quaternion.identity, 1);
+    }
+
     private void Queue(int action, string key, Vector3 position, Quaternion rotation, int local)
     {
         if (requestCount >= RequestCapacity) return;
@@ -542,7 +579,7 @@ public class SharePanel : MonoBehaviour
             if (slot == 1) return ActionSpawn;
             if (slot == 2) return ActionSaveOrb;
         }
-        else if (kind == KindWorld || kind == KindAvatar)
+        else if (kind == KindWorld || kind == KindAvatar || kind == KindFolder)
         {
             if (slot == 1) return ActionSaveOrb;
         }
@@ -570,6 +607,7 @@ public class SharePanel : MonoBehaviour
         if (kind == KindProp) return T("プロップ", "Prop");
         if (kind == KindAvatar) return T("アバター", "Avatar");
         if (kind == KindServer) return T("サーバー", "Server");
+        if (kind == KindFolder) return T("フォルダー", "Folder");
         return T("その他", "Other");
     }
 
@@ -672,6 +710,10 @@ public class SharePanel : MonoBehaviour
                 itemKey[item] == selectedKey);
         }
         RenderPreview();
+        int shown = Find(selectedKey);
+        bool removable = shown >= 0 && itemRemovable[shown] != 0 && sourceReady == 1;
+        DeleteButton.gameObject.SetActive(removable);
+        if (removable && (deleteKey != selectedKey || Time.time > deleteUntil)) DeleteLabel.text = T("削除", "Delete");
         PreviewPrevButton.gameObject.SetActive(previewPageCount > 1);
         PreviewNextButton.gameObject.SetActive(previewPageCount > 1);
     }
@@ -952,21 +994,22 @@ public class SharePanel : MonoBehaviour
         SendViewTo(null);
     }
 
-    // [MsgView, page (2 bytes), preview page (2 bytes), filter bits, move on, key length, key]
+    // [MsgView, page (2 bytes), preview page (2 bytes), filter bits (2 bytes), move on, key length, key]
     private void SendViewTo(ushort[] to)
     {
         if (net == null || !net.HasNetworkID) return;
         string key = selectedKey == null ? "" : selectedKey;
-        byte[] buffer = new byte[8 + key.Length];
+        byte[] buffer = new byte[9 + key.Length];
         buffer[0] = MsgView;
         buffer[1] = (byte)(page & 0xFF);
         buffer[2] = (byte)((page >> 8) & 0xFF);
         buffer[3] = (byte)(previewPage & 0xFF);
         buffer[4] = (byte)((previewPage >> 8) & 0xFF);
-        buffer[5] = (byte)filterMask;
-        buffer[6] = (byte)moveEnabled;
-        buffer[7] = (byte)key.Length;
-        for (int c = 0; c < key.Length; c++) buffer[8 + c] = (byte)key[c];
+        buffer[5] = (byte)(filterMask & 0xFF);
+        buffer[6] = (byte)((filterMask >> 8) & 0xFF);
+        buffer[7] = (byte)moveEnabled;
+        buffer[8] = (byte)key.Length;
+        for (int c = 0; c < key.Length; c++) buffer[9 + c] = (byte)key[c];
         net.SendCustomNetworkEvent(buffer, DeliveryMethod.ReliableOrdered, to);
     }
 
@@ -1045,14 +1088,14 @@ public class SharePanel : MonoBehaviour
             order = next;
             Render();
         }
-        else if (buffer[0] == MsgView && buffer.Length >= 8)
+        else if (buffer[0] == MsgView && buffer.Length >= 9)
         {
             page = buffer[1] | (buffer[2] << 8);
             previewPage = buffer[3] | (buffer[4] << 8);
-            filterMask = buffer[5];
-            moveEnabled = buffer[6] != 0 ? 1 : 0;
-            int length = buffer[7];
-            selectedKey = 8 + length <= buffer.Length ? Encoding.ASCII.GetString(buffer, 8, length) : "";
+            filterMask = buffer[5] | (buffer[6] << 8);
+            moveEnabled = buffer[7] != 0 ? 1 : 0;
+            int length = buffer[8];
+            selectedKey = 9 + length <= buffer.Length ? Encoding.ASCII.GetString(buffer, 9, length) : "";
             ApplyMove();
             Render();
         }

@@ -114,7 +114,8 @@ public class SharePanelSource : MonoBehaviour
             float aspect = 1f;
             if (thumb != null) thumbAspect.TryGetValue(key, out aspect);
             string size = thumb != null ? thumb.width + " × " + thumb.height : "";
-            Panel.AddItem(key, SharePanel.KindPhoto, size, "", "", thumb, aspect, false);
+            // Basis lets anyone remove a photo.
+            Panel.AddItem(key, SharePanel.KindPhoto, size, "", "", thumb, aspect, false, true);
         }
 
         BasisContentSphere[] spheres = Resources.FindObjectsOfTypeAll<BasisContentSphere>();
@@ -128,6 +129,7 @@ public class SharePanelSource : MonoBehaviour
             else if (type == 1) kind = SharePanel.KindProp;
             else if (type == 2) kind = SharePanel.KindWorld;
             else if (type == 3) kind = SharePanel.KindServer;
+            else if (type == 7) kind = SharePanel.KindFolder;
             else if (type == 5) kind = SharePanel.KindLink;
             else if (type == 6) kind = SharePanel.KindText;
 
@@ -160,7 +162,7 @@ public class SharePanelSource : MonoBehaviour
                 saved = LibrarySaved(sphere.ContentURL);
                 if (thumb != null) aspect = (float)thumb.width / thumb.height;
             }
-            Panel.AddItem(key, kind, title, sphere.CreatorDisplayName, body, thumb, aspect, saved);
+            Panel.AddItem(key, kind, title, sphere.CreatorDisplayName, body, thumb, aspect, saved, sphere.CanLocalPlayerRemove);
         }
 
         Panel.EndItems();
@@ -285,6 +287,13 @@ public class SharePanelSource : MonoBehaviour
                 image.OnCopyPressed();
                 Panel.Notice("写真をコピーしました", "Copied the photo");
             }
+            else if (action == SharePanel.ActionDelete)
+            {
+                // The photo's own delete asks twice; the panel has already asked.
+                image.OnDeletePressed();
+                image.OnDeletePressed();
+                Panel.Notice("写真を削除しました", "Deleted the photo");
+            }
             else if (action == SharePanel.ActionSave)
             {
                 image.OnSavePressed();
@@ -304,6 +313,12 @@ public class SharePanelSource : MonoBehaviour
         else if (action == SharePanel.ActionSpawn && (int)found.ContentType == 1)
         {
             Spawn(found.ContentURL, found.UnlockPassword);
+        }
+        else if (action == SharePanel.ActionDelete)
+        {
+            if (!found.CanLocalPlayerRemove) return;
+            found.RequestRemove();
+            Panel.Notice("削除しました", "Deleted");
         }
         else if (action == SharePanel.ActionSaveOrb)
         {

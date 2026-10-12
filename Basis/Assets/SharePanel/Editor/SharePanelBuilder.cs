@@ -103,6 +103,7 @@ public static partial class SharePanelBuilder
             Hex("E36F8E"), // avatar
             Hex("A0A0A0"), // other
             Hex("CC66FF"), // server
+            Hex("D9A441"), // folder
         };
 
         // Header: title and count on the left; language and the move switch on the right.
@@ -123,19 +124,19 @@ public static partial class SharePanelBuilder
         // Type filter above the list.
         float listLeft = left + 0.03f;
         float filterY = top - 0.155f;
-        // All, prop, avatar, world, server, link, text, photo.
-        panel.FilterKinds = new[] { -1, 4, 5, 3, 7, 1, 2, 0 };
+        // All, prop, avatar, world, server, link, text, photo, folder.
+        panel.FilterKinds = new[] { -1, 4, 5, 3, 7, 1, 2, 0, 8 };
         panel.FilterButtons = new BasisInteractableButton[panel.FilterKinds.Length];
         panel.FilterLabels = new TextMeshPro[panel.FilterKinds.Length];
         panel.FilterLamps = new MeshRenderer[panel.FilterKinds.Length];
         for (int i = 0; i < panel.FilterKinds.Length; i++)
         {
-            panel.FilterButtons[i] = LabelledButton(root.transform, font, "Filter " + i, "", new Vector3(listLeft + 0.07f + i * 0.145f, filterY, Face), 0.135f, 0.06f, out TextMeshPro label);
-            label.fontSize = 0.27f;
+            panel.FilterButtons[i] = LabelledButton(root.transform, font, "Filter " + i, "", new Vector3(listLeft + 0.062f + i * 0.13f, filterY, Face), 0.122f, 0.06f, out TextMeshPro label);
+            label.fontSize = 0.25f;
             Place(label, new Vector3(0f, 0.005f, -0.0075f));
             panel.FilterLabels[i] = label;
             // The lamp along the bottom of the button: the kind's colour when on, grey when off.
-            GameObject lamp = Box(panel.FilterButtons[i].transform, "Lamp", new Vector3(0f, -0.021f, -0.0072f), new Vector3(0.115f, 0.009f, 0.002f), Mat("Lamp", Color.white));
+            GameObject lamp = Box(panel.FilterButtons[i].transform, "Lamp", new Vector3(0f, -0.021f, -0.0072f), new Vector3(0.102f, 0.009f, 0.002f), Mat("Lamp", Color.white));
             panel.FilterLamps[i] = lamp.GetComponent<MeshRenderer>();
         }
 
@@ -189,8 +190,13 @@ public static partial class SharePanelBuilder
         image.SetActive(false);
 
         float previewPagerY = previewBottom + 0.04f;
-        panel.PreviewPrevButton = LabelledButton(root.transform, font, "Preview Prev", "＜", new Vector3(previewX - 0.15f, previewPagerY, Face), 0.08f, 0.05f, out _);
-        panel.PreviewNextButton = LabelledButton(root.transform, font, "Preview Next", "＞", new Vector3(previewX + 0.15f, previewPagerY, Face), 0.08f, 0.05f, out _);
+        panel.PreviewPrevButton = LabelledButton(root.transform, font, "Preview Prev", "＜", new Vector3(previewX - 0.11f, previewPagerY, Face), 0.08f, 0.05f, out _);
+        panel.PreviewNextButton = LabelledButton(root.transform, font, "Preview Next", "＞", new Vector3(previewX + 0.11f, previewPagerY, Face), 0.08f, 0.05f, out _);
+        // Removes the share on the large view for everyone (shown only where Basis allows it).
+        panel.DeleteButton = Button(root.transform, "Delete", new Vector3(previewLeft + 0.085f, previewPagerY, Face), new Vector3(0.14f, 0.055f, 0.012f), Hex("E8A0A0"), Hex("F2BDBD"), Hex("D47C7C"));
+        panel.DeleteLabel = Text(panel.DeleteButton.transform, "Label", font, "", 0.28f, new Vector2(0.145f, 0.055f), Hex("6B1E1E"), TextAlignmentOptions.Center, true);
+        panel.DeleteLabel.textWrappingMode = TextWrappingModes.NoWrap;
+        Place(panel.DeleteLabel, new Vector3(0f, 0f, -0.0075f));
         panel.PreviewPageText = Text(root.transform, "Preview Page", font, "", 0.34f, new Vector2(0.16f, 0.07f), faint, TextAlignmentOptions.Center, true);
         Place(panel.PreviewPageText, new Vector3(previewX, previewPagerY, TextZ));
 
