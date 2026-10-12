@@ -1,0 +1,20 @@
+{
+    "name": "FishingWorld.Export",
+    "rootNamespace": "",
+    "references": [
+        "glTFast",
+        "glTFast.Export",
+        "Unity.TextMeshPro"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}
