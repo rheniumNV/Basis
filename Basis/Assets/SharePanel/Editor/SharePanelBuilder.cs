@@ -123,7 +123,8 @@ public static partial class SharePanelBuilder
         // Type filter above the list.
         float listLeft = left + 0.03f;
         float filterY = top - 0.155f;
-        panel.FilterKinds = new[] { -1, 0, 1, 2, 7, 3, 4, 5 };
+        // All, prop, avatar, world, server, link, text, photo.
+        panel.FilterKinds = new[] { -1, 4, 5, 3, 7, 1, 2, 0 };
         panel.FilterButtons = new BasisInteractableButton[panel.FilterKinds.Length];
         panel.FilterLabels = new TextMeshPro[panel.FilterKinds.Length];
         panel.FilterLamps = new MeshRenderer[panel.FilterKinds.Length];
