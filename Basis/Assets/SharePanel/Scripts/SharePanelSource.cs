@@ -1,0 +1,237 @@
+using Basis.BasisUI;
+using Basis.ImagePickup;
+using Cilbox;
+using System.Collections.Generic;
+using TMPro;
+using UnityEngine;
+
+/// <summary>
+/// Reads what is shared on the server for the <see cref="SharePanel"/> and carries out the
+/// actions that need Basis itself: copying to the clipboard, saving a photo, and moving a photo.
+///
+/// Every Basis type used here is outside the prop whitelist, so this component is what the
+/// permission prompt is about. If the player refuses, only this component stops and the panel
+/// keeps showing its notice. Three rules keep it that way:
+/// - Only methods and properties of these types, never their fields: Cilbox resolves a field of
+///   a type it may not use by dereferencing a null type, which breaks the whole prop (and its
+///   bundle build, where nothing has been allowed yet). So a photo is known by its object name,
+///   and an orb's title comes from the TextMeshPro under it.
+/// - No method of a whitelisted type that the whitelist leaves out: that also breaks the prop.
+/// - No typeof(...) (System.Type has no allowed methods); Resources is not whitelisted, so its
+///   generic lookup is fine.
+/// </summary>
+[Cilboxable]
+public class SharePanelSource : MonoBehaviour
+{
+    public SharePanel Panel;
+    public float RefreshSeconds = 1f;
+    // Thumbnails are decoded from the photo's PNG once and kept while the photo exists.
+    public int MaxThumbnails = 48;
+
+    private float nextRefresh;
+    private Dictionary<string, Texture2D> thumbs;
+    private Dictionary<string, float> thumbAspect;
+    private List<string> seen;
+    private MaterialPropertyBlock block;
+
+    private void Start()
+    {
+        thumbs = new Dictionary<string, Texture2D>();
+        thumbAspect = new Dictionary<string, float>();
+        seen = new List<string>();
+        block = new MaterialPropertyBlock();
+    }
+
+    private void Update()
+    {
+        int requests = Panel.RequestCount();
+        if (requests > 0)
+        {
+            for (int i = 0; i < requests; i++)
+            {
+                Perform(Panel.RequestAction(i), Panel.RequestKey(i), Panel.RequestPosition(i), Panel.RequestRotation(i), Panel.RequestIsLocal(i));
+            }
+            Panel.ClearRequests();
+        }
+
+        if (Time.time < nextRefresh) return;
+        nextRefresh = Time.time + RefreshSeconds;
+        Refresh();
+    }
+
+    private void Refresh()
+    {
+        seen.Clear();
+        Panel.BeginItems();
+
+        BasisImagePickupObject[] images = Resources.FindObjectsOfTypeAll<BasisImagePickupObject>();
+        for (int i = 0; i < images.Length; i++)
+        {
+            BasisImagePickupObject image = images[i];
+            if (image == null) continue;
+            // "BasisImagePickup_" + the first 8 hex digits of the image's id: the same on every client.
+            string key = "img:" + image.gameObject.name;
+            seen.Add(key);
+            Texture2D thumb = Thumbnail(key, image);
+            float aspect = 1f;
+            if (thumb != null) thumbAspect.TryGetValue(key, out aspect);
+            string size = thumb != null ? thumb.width + " × " + thumb.height : "";
+            Panel.AddItem(key, SharePanel.KindPhoto, size, "", "", thumb, aspect);
+        }
+
+        BasisContentSphere[] spheres = Resources.FindObjectsOfTypeAll<BasisContentSphere>();
+        for (int i = 0; i < spheres.Length; i++)
+        {
+            BasisContentSphere sphere = spheres[i];
+            if (sphere == null || string.IsNullOrEmpty(sphere.SphereNetID)) continue;
+            int type = (int)sphere.ContentType;
+            int kind = SharePanel.KindOther;
+            if (type == 0) kind = SharePanel.KindAvatar;
+            else if (type == 1) kind = SharePanel.KindProp;
+            else if (type == 2) kind = SharePanel.KindWorld;
+            else if (type == 5) kind = SharePanel.KindLink;
+            else if (type == 6) kind = SharePanel.KindText;
+
+            string key = "orb:" + sphere.SphereNetID;
+            string title = "";
+            string body = "";
+            Texture thumb = null;
+            float aspect = 1f;
+            if (kind == SharePanel.KindLink || kind == SharePanel.KindText)
+            {
+                body = sphere.ContentURL;
+            }
+            else
+            {
+                title = OrbTitle(sphere);
+                thumb = OrbImage(sphere);
+                if (thumb != null) aspect = (float)thumb.width / thumb.height;
+            }
+            Panel.AddItem(key, kind, title, sphere.CreatorDisplayName, body, thumb, aspect);
+        }
+
+        Panel.EndItems();
+        ForgetGone();
+        // Only now: a refused type fails the first call that uses it and stops this component,
+        // so reaching here means the permission was given and the panel's notice can go.
+        Panel.SourceReady();
+    }
+
+    // The orb's label reads "<type>\n<name>" once its bundle's name is known.
+    private string OrbTitle(BasisContentSphere sphere)
+    {
+        TextMeshPro label = sphere.GetComponentInChildren<TextMeshPro>(true);
+        if (label == null) return "";
+        string text = label.text;
+        if (string.IsNullOrEmpty(text)) return "";
+        int line = text.IndexOf('\n');
+        return line >= 0 ? text.Substring(line + 1) : "";
+    }
+
+    // The orb's picture: the bundle's image blended with the type colour, set on its renderer.
+    // A 1x1 texture is just the type colour.
+    private Texture OrbImage(BasisContentSphere sphere)
+    {
+        Renderer renderer = sphere.GetComponentInChildren<Renderer>(true);
+        if (renderer == null) return null;
+        int count = renderer.sharedMaterials.Length;
+        for (int m = 0; m < count; m++)
+        {
+            renderer.GetPropertyBlock(block, m);
+            Texture texture = block.GetTexture("_MainTex");
+            if (texture != null && texture.width > 1) return texture;
+        }
+        return null;
+    }
+
+    private Texture2D Thumbnail(string key, BasisImagePickupObject image)
+    {
+        Texture2D thumb;
+        if (thumbs.TryGetValue(key, out thumb)) return thumb;
+        if (thumbs.Count >= MaxThumbnails) return null;
+        byte[] png = image.CleanPng;
+        if (png == null || png.Length == 0) return null;
+        thumb = new Texture2D(2, 2);
+        if (!ImageConversion.LoadImage(thumb, png, true))
+        {
+            Destroy(thumb);
+            return null;
+        }
+        thumbs[key] = thumb;
+        thumbAspect[key] = thumb.height > 0 ? (float)thumb.width / thumb.height : 1f;
+        return thumb;
+    }
+
+    private void ForgetGone()
+    {
+        List<string> gone = null;
+        foreach (string key in thumbs.Keys)
+        {
+            if (seen.Contains(key)) continue;
+            if (gone == null) gone = new List<string>();
+            gone.Add(key);
+        }
+        if (gone == null) return;
+        for (int i = 0; i < gone.Count; i++)
+        {
+            Destroy(thumbs[gone[i]]);
+            thumbs.Remove(gone[i]);
+            thumbAspect.Remove(gone[i]);
+        }
+    }
+
+    private void Perform(int action, string key, Vector3 position, Quaternion rotation, bool local)
+    {
+        if (string.IsNullOrEmpty(key)) return;
+        if (key.StartsWith("img:"))
+        {
+            BasisImagePickupObject image = FindImage(key.Substring(4));
+            if (image == null) return;
+            if (action == SharePanel.ActionBring)
+            {
+                // Every client gets this request; only the one moving the photo for everyone
+                // (its controller) moves it, and Basis sends the new place to the rest.
+                if (image.IsController) image.transform.SetPositionAndRotation(position, rotation);
+                if (local) Panel.Notice("写真を手元に出しました", "Brought the photo over");
+            }
+            else if (action == SharePanel.ActionCopy)
+            {
+                image.OnCopyPressed();
+                Panel.Notice("写真をコピーしました", "Copied the photo");
+            }
+            else if (action == SharePanel.ActionSave)
+            {
+                image.OnSavePressed();
+                Panel.Notice("写真をピクチャフォルダに保存しました", "Saved the photo to your Pictures folder");
+            }
+            return;
+        }
+        if (key.StartsWith("orb:") && action == SharePanel.ActionCopy)
+        {
+            BasisContentSphere sphere = FindSphere(key.Substring(4));
+            if (sphere == null) return;
+            BasisClipboard.Copy(sphere.ContentURL);
+            Panel.Notice("コピーしました", "Copied");
+        }
+    }
+
+    private BasisImagePickupObject FindImage(string name)
+    {
+        BasisImagePickupObject[] images = Resources.FindObjectsOfTypeAll<BasisImagePickupObject>();
+        for (int i = 0; i < images.Length; i++)
+        {
+            if (images[i] != null && images[i].gameObject.name == name) return images[i];
+        }
+        return null;
+    }
+
+    private BasisContentSphere FindSphere(string id)
+    {
+        BasisContentSphere[] spheres = Resources.FindObjectsOfTypeAll<BasisContentSphere>();
+        for (int i = 0; i < spheres.Length; i++)
+        {
+            if (spheres[i] != null && spheres[i].SphereNetID == id) return spheres[i];
+        }
+        return null;
+    }
+}
