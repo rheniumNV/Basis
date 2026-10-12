@@ -47,6 +47,10 @@ public class SharePanelSource : MonoBehaviour
     private float nextSavedRefresh;
     private string libraryJson = "";
     private string serversJson = "";
+    // A prop waiting for its bundle's metadata before the library's placement can start. Held as
+    // object: a field typed with a type Cilbox may refuse is not worth the risk.
+    private object pendingSpawnItem;
+    private object pendingSpawnTask;
 
     private void Start()
     {
@@ -67,6 +71,14 @@ public class SharePanelSource : MonoBehaviour
                 Perform(Panel.RequestAction(i), Panel.RequestKey(i), Panel.RequestPosition(i), Panel.RequestRotation(i), Panel.RequestIsLocal(i));
             }
             Panel.ClearRequests();
+        }
+
+        if (pendingSpawnTask != null && ((System.Threading.Tasks.Task)pendingSpawnTask).IsCompleted)
+        {
+            object item = pendingSpawnItem;
+            pendingSpawnTask = null;
+            pendingSpawnItem = null;
+            Place(item);
         }
 
         if (Time.time < nextRefresh) return;
@@ -291,11 +303,7 @@ public class SharePanelSource : MonoBehaviour
         }
         else if (action == SharePanel.ActionSpawn && (int)found.ContentType == 1)
         {
-            // The same request the library makes: the prop loads for everyone, here.
-            SerializableBasis.LocalLoadResource loaded;
-            bool requested = BasisNetworkSpawnItem.RequestGameObjectLoad(found.UnlockPassword, found.ContentURL, position, rotation, Vector3.one, false, false, false, out loaded);
-            if (requested) Panel.Notice("プロップを取り出しています…", "Spawning the prop…");
-            else Panel.Notice("プロップを取り出せませんでした", "Could not spawn the prop");
+            Spawn(found.ContentURL, found.UnlockPassword);
         }
         else if (action == SharePanel.ActionSaveOrb)
         {
@@ -336,6 +344,39 @@ public class SharePanelSource : MonoBehaviour
         }
         Panel.Notice("接続しています…", "Joining…");
         BasisConnectionService.ConnectAsync(entry, userName, false);
+    }
+
+    // Spawns a shared prop the way the library does: the prop's own placement settings, and for
+    // most props the pointer placement where the player picks the spot. The library's item is
+    // made from JSON, since its fields cannot be set from here.
+    private void Spawn(string url, string password)
+    {
+        if (string.IsNullOrEmpty(url)) return;
+        string json = "{\"Mode\":2,\"PlacementType\":0,\"Url\":\"" + JsonText(url) + "\",\"Pass\":\"" + JsonText(password) + "\"}";
+        BasisDataStoreItemKeys.ItemKey item = JsonUtility.FromJson<BasisDataStoreItemKeys.ItemKey>(json);
+        if (item == null) return;
+        CachedMetaData.CachedContent meta;
+        if (CachedMetaData.TryGetMeta(url, out meta))
+        {
+            Place(item);
+            return;
+        }
+        // The library knows a prop's size and placement from its metadata; fetch it first.
+        Panel.Notice("プロップの情報を読み込んでいます…", "Reading the prop's details…");
+        pendingSpawnItem = item;
+        pendingSpawnTask = CachedMetaData.PreloadMetaDataForItem(item);
+    }
+
+    private void Place(object item)
+    {
+        Panel.Notice("置く場所を選んでください", "Choose where to put it");
+        ContentLoader.LoadProp((BasisDataStoreItemKeys.ItemKey)item, BundledContentHolder.NetworkType.Networked, false, false, false);
+    }
+
+    private string JsonText(string text)
+    {
+        if (string.IsNullOrEmpty(text)) return "";
+        return text.Replace("\\", "\\\\").Replace("\"", "\\\"");
     }
 
     private BasisImagePickupObject FindImage(string name)
