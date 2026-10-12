@@ -533848,7 +533848,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::FishingBackend
   Controller: {fileID: 2044131259}
   ScriptWarning: {fileID: 973592339}
-  ApiBaseUrl: https://basis-fishing.rheni.work
+  ApiBaseUrl: https://basis-fishing-api.rheni.work
   RankingLimit: 10
   RankingRefreshSeconds: 60
   RetrySeconds: 10

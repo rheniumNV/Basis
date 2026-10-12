@@ -1,5 +1,5 @@
 {
-  "apiBaseUrl": "https://basis-fishing.rheni.work",
+  "apiBaseUrl": "https://basis-fishing-api.rheni.work",
   "rankingLimit": 10,
   "rankingRefreshSeconds": 60,
   "editorTestUserId": "editor-test-user"
